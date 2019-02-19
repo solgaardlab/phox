@@ -1,4 +1,6 @@
 import numpy as np
+import matplotlib
+import matplotlib.pyplot as plt
 from neurophox.helpers import get_alpha_checkerboard
 
 DARK_RED = (0.7, 0, 0)
@@ -328,3 +330,74 @@ def make_tri_theta_mzi_labels(ax, dim, marker_size, mean=False):
         c=theta[checkerboard_points],
         cmap='hot', zorder=3, s=int(2.5 * marker_size), edgecolor=DARK_RED, linewidth=1)
     h.set_clim((0, np.pi / 2))
+
+
+def cmap_map(function, cmap):
+    """ Applies function (which should operate on vectors of shape 3: [r, g, b]), on colormap cmap.
+    This routine will break any discontinuous points in a colormap.
+    """
+    cdict = cmap._segmentdata
+    step_dict = {}
+    # Firt get the list of points where the segments start or end
+    for key in ('red', 'green', 'blue'):
+        step_dict[key] = list(map(lambda x: x[0], cdict[key]))
+    step_list = sum(step_dict.values(), [])
+    step_list = np.array(list(set(step_list)))
+    # Then compute the LUT, and apply the function to the LUT
+    reduced_cmap = lambda step: np.array(cmap(step)[0:3])
+    old_LUT = np.array(list(map(reduced_cmap, step_list)))
+    new_LUT = np.array(list(map(function, old_LUT)))
+    # Now try to make a minimal segment definition of the new LUT
+    cdict = {}
+    for i, key in enumerate(['red', 'green', 'blue']):
+        this_cdict = {}
+        for j, step in enumerate(step_list):
+            if step in step_dict[key]:
+                this_cdict[step] = new_LUT[j, i]
+            elif new_LUT[j, i] != old_LUT[j, i]:
+                this_cdict[step] = new_LUT[j, i]
+        colorvector = list(map(lambda x: x + (x[1],), this_cdict.items()))
+        colorvector.sort()
+        cdict[key] = colorvector
+
+    return matplotlib.colors.LinearSegmentedColormap('colormap', cdict, 1024)
+
+
+light_rdbu = cmap_map(lambda x: 0.75 * x + 0.25, plt.cm.RdBu)
+
+
+def plot_planar_boundary(X, Y, model, grid_points=50):
+
+
+    x_min, y_min = -2, -2
+    x_max, y_max = 2, 2
+    xx, yy = np.meshgrid(np.linspace(x_min, x_max, grid_points), np.linspace(x_min, x_max, grid_points))
+
+    # Predict the function value for the whole grid
+    N = 2
+    inputs = []
+    for x, y in zip(xx.flatten(), yy.flatten()):
+        inputs.append([x, y])
+    inputs = np_to_k_complex(add_bias(np.asarray(inputs)).astype(np.float32))
+
+    Y_hat = model.predict(inputs)
+    Y_hat = [yhat[0] for yhat in Y_hat]
+    Z = np.array(Y_hat)
+    Z = Z.reshape(xx.shape)
+
+    # Plot the contour and training examples
+    plt.figure(figsize=(6, 6), dpi=200)
+    plt.contourf(xx, yy, Z, 50, cmap=light_rdbu)
+    plt.clim((0, 1))
+    plt.colorbar(ticks=[0, 0.2, 0.4, 0.6, 0.8, 1])
+
+    points_x = X.T[0, :]
+    points_y = X.T[1, :]
+    labels = np.array([1 if yi[0] > yi[1] else 0 for yi in np.abs(Y)]).flatten()
+
+    plt.ylabel(r'$x_2$', fontsize=16)
+    plt.xlabel(r'$x_1$', fontsize=16)
+
+    plt.scatter(points_x, points_y, c=labels, s=6, cmap=plt.cm.RdBu)
+
+    plt.show()
