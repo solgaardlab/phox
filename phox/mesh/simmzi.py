@@ -6,6 +6,7 @@ from shapely.affinity import rotate, translate
 from shapely.geometry import Polygon, box
 from typing import Tuple
 
+from ..plotting.helpers import DARK_RED, DARK_ORANGE
 from phoxy.components.photonics import MZI
 from phoxy.fabrication.material import Material, OXIDE, NITRIDE
 from phoxy.components.utils import BACKGROUND_COLOR, PHI_COLOR, THETA_COLOR, GAMMA_COLOR, BEAMSPLITTER_COLOR, HADAMARD_COLOR
@@ -130,14 +131,34 @@ class SimMZI(MZI):
                     horizontalalignment='center', fontsize=label_size, color=PHI_COLOR)
 
     def plot_control(self, ax, x_padding_factor: float=1.15, y_padding_factor: float=2,
-                     label_size=None, basis=None, include_gamma=False):
+                     label_size=None, basis=None, include_gamma=False, add_x_marker=False):
+        theta_color = DARK_ORANGE if add_x_marker else DEMO_THETA_COLOR
+        phi_color = DARK_ORANGE if add_x_marker else DEMO_PHI_COLOR
+
         lower_path, upper_path = self._build_patterns(include_outer_bend=False)
         patches = []
         colors = []
         light_amplitude_mappable = ScalarMappable(cmap='hot')
         light_amplitude_mappable.set_clim(0, 1)
         # ax.set_facecolor(BACKGROUND_COLOR)
-        ax.set_xlim((-x_padding_factor * self.x_span / 2, x_padding_factor * self.x_span / 2))
+        for wvg_idx, wvg_path in enumerate([upper_path, lower_path]):
+            for wvg_poly_idx, polygon_point_list in enumerate(reversed(wvg_path.polygons)):
+                waveguide_field_patch = PolygonPatch(
+                    rotate(Polygon(polygon_point_list), angle=np.pi,
+                           origin=(0, 0), use_radians=True), edgecolor='none')
+                patches.append(waveguide_field_patch)
+                colors.append(_mzi_poly_idx_to_layer_color_demo(wvg_poly_idx))
+
+        if add_x_marker:
+            ax.set_xlim((-(x_padding_factor + 1) * self.x_span / 2, x_padding_factor * self.x_span / 2))
+            ax.plot([-self.x_span - 10, -self.x_span + 10], [10, -10], color='black', linewidth=0.9, zorder=0)
+            ax.plot([-self.x_span - 10, -self.x_span + 10], [-10, 10], color='black', linewidth=0.9, zorder=0)
+            ax.scatter([-self.x_span], [0], color=DARK_RED, s=30, zorder=2)
+            ax.annotate(r'$=$', (-self.x_span * 0.75 + 3, 0), fontsize=label_size,
+                        horizontalalignment='center', verticalalignment='center')
+            ax.axis('off')
+        else:
+            ax.set_xlim((-x_padding_factor * self.x_span / 2, x_padding_factor * self.x_span / 2))
         ax.set_ylim((y_padding_factor * self.y_span / 2, -y_padding_factor * self.y_span / 2))
         ax.get_xaxis().set_ticks([])
         ax.get_yaxis().set_ticks([])
@@ -183,7 +204,7 @@ class SimMZI(MZI):
         )
         theta_upper_label = {
             None: r'$\boldsymbol{\theta_{mn}(\theta_{\sigma, mn})}$',
-            'sm': r'$\boldsymbol{\theta_{\sigma, mn}}$',
+            'sm': r'$\boldsymbol{\theta_{\sigma, mn}}$' if not add_x_marker else r'$\boldsymbol{R_\theta}$',
             'hs': r'$\boldsymbol{\theta_{\sigma, mn} / 2}$',
             'sym': r'$\boldsymbol{\theta_{\sigma, mn} / 2}$',
             'asym': r'$\boldsymbol{\theta_{\sigma, mn}}$'
@@ -197,7 +218,7 @@ class SimMZI(MZI):
         }
         phi_upper_label = {
             None: r'$\boldsymbol{\phi_{mn}(\phi_{\sigma, mn})}$',
-            'sm': r'$\boldsymbol{\phi_{\sigma, mn}}$',
+            'sm': r'$\boldsymbol{\phi_{\sigma, mn}}$' if not add_x_marker else r'$\boldsymbol{R_\phi}$',
             'hs': r'$\boldsymbol{\phi_{\sigma, mn}}$',
             'sym': r'$\boldsymbol{\phi_{\sigma, mn}}$',
             'asym': r'$\boldsymbol{\phi_{\sigma, mn}}$'
@@ -211,74 +232,89 @@ class SimMZI(MZI):
         }
         if label_size is not None:
             ax.text(theta_center - self.x_span / 2, -self.y_span / 2 - phase_shifter_thickness * 0.75,
-                    theta_upper_label[basis], color=DEMO_THETA_COLOR, horizontalalignment='center', fontsize=label_size)
+                    theta_upper_label[basis], color=theta_color, horizontalalignment='center', fontsize=label_size)
             ax.text(phi_center - self.x_span / 2, -self.y_span / 2 - phase_shifter_thickness * 0.75,
-                    phi_upper_label[basis], color=DEMO_PHI_COLOR, horizontalalignment='center', fontsize=label_size)
+                    phi_upper_label[basis], color=phi_color, horizontalalignment='center', fontsize=label_size)
             if theta_lower_label[basis] is not None:
                 ax.text(theta_center - self.x_span / 2, -self.y_span / 2 + self.mzi_y_span + phase_shifter_thickness * 0.75,
-                        theta_lower_label[basis], color=DEMO_THETA_COLOR, verticalalignment='top',
+                        theta_lower_label[basis], color=theta_color, verticalalignment='top',
                         horizontalalignment='center', fontsize=label_size)
             if phi_lower_label[basis] is not None:
                 ax.text(phi_center - self.x_span / 2, -self.y_span / 2 + self.mzi_y_span + phase_shifter_thickness * 0.75,
-                        phi_lower_label[basis], color=DEMO_PHI_COLOR, verticalalignment='top',
+                        phi_lower_label[basis], color=phi_color, verticalalignment='top',
+                        horizontalalignment='center', fontsize=label_size)
+            if add_x_marker:
+                center_x = self.end_length + self.end_bend_dim[0] + self.mzi_x_span / 2 - self.x_span / 2
+                bs_distance = self.phase_shifter_arm_length / 2 + self.bend_dim[0] + self.interaction_length / 2
+                ax.text(center_x - bs_distance,
+                        -self.y_span / 2 - phase_shifter_thickness * 0.75,
+                        r'$\boldsymbol{B}$', color=DARK_RED, verticalalignment='bottom',
+                        horizontalalignment='center', fontsize=label_size)
+                ax.text(center_x + bs_distance,
+                        -self.y_span / 2 - phase_shifter_thickness * 0.75,
+                        r'$\boldsymbol{B}$', color=DARK_RED, verticalalignment='bottom',
                         horizontalalignment='center', fontsize=label_size)
         patches.append(PolygonPatch(
             translate(theta_phase_shifter, -self.x_span / 2, -self.y_span / 2),
             edgecolor='none'))
-        colors.append((*DEMO_THETA_COLOR, 1))
+        colors.append((*theta_color, 0.5))
         if basis == 'sym' or basis == 'hs' or basis is None:
             patches.append(PolygonPatch(
                 translate(theta_phase_shifter, -self.x_span / 2, -self.y_span / 2 + self.mzi_y_span),
                 edgecolor='none'))
-            colors.append((*DEMO_THETA_COLOR, 1))
+            colors.append((*theta_color, 0.5))
         patches.append(PolygonPatch(
             translate(theta_photodetector, -self.x_span / 2, -self.y_span / 2),
             edgecolor='none'))
-        colors.append(DEMO_PHOTODETECTOR_COLOR)
+        colors.append(theta_color)
+        if theta_lower_label[basis] is not None:
+            patches.append(PolygonPatch(
+                translate(theta_photodetector, -self.x_span / 2, -self.y_span / 2 + self.mzi_y_span),
+                edgecolor='none'))
+            colors.append(phi_color)
         patches.append(PolygonPatch(
-            translate(theta_photodetector, -self.x_span / 2, -self.y_span / 2 + self.mzi_y_span),
+            translate(phi_phase_shifter, -self.x_span / 2, -self.y_span / 2),
             edgecolor='none'))
-        colors.append(DEMO_PHOTODETECTOR_COLOR)
-        patches.append(PolygonPatch(translate(phi_phase_shifter, -self.x_span / 2, -self.y_span / 2), edgecolor='none'))
-        colors.append((*DEMO_PHI_COLOR, 1))
+        colors.append((*phi_color, 0.5))
         if include_gamma:
             patches.append(PolygonPatch(
                 translate(gamma_phase_shifter, -self.x_span / 2, -self.y_span / 2),
                 edgecolor='none'))
-            colors.append((*DEMO_GAMMA_COLOR, 1))
+            colors.append((*DEMO_GAMMA_COLOR, 0.5))
             patches.append(PolygonPatch(
                 translate(gamma_phase_shifter, -self.x_span / 2, -self.y_span / 2 + self.mzi_y_span),
                 edgecolor='none'))
-            colors.append((*DEMO_GAMMA_COLOR, 1))
+            colors.append((*DEMO_GAMMA_COLOR, 0.5))
             patches.append(PolygonPatch(
                 translate(gamma_photodetector, -self.x_span / 2, -self.y_span / 2),
                 edgecolor='none'))
-            colors.append(DEMO_PHOTODETECTOR_COLOR)
+            colors.append(DEMO_GAMMA_COLOR)
             patches.append(PolygonPatch(
                 translate(gamma_photodetector, -self.x_span / 2, -self.y_span / 2 + self.mzi_y_span),
                 edgecolor='none'))
-            colors.append(DEMO_PHOTODETECTOR_COLOR)
+            colors.append(DEMO_GAMMA_COLOR)
 
         if basis == 'sym' or basis == 'asym' or basis is None:
             patches.append(PolygonPatch(
                 translate(phi_phase_shifter, -self.x_span / 2, -self.y_span / 2 + self.mzi_y_span),
                 edgecolor='none'))
-            colors.append((*DEMO_PHI_COLOR, 1))
+            colors.append((*phi_color, 0.5))
         patches.append(PolygonPatch(
             translate(phi_photodetector, -self.x_span / 2, -self.y_span / 2),
             edgecolor='none'))
-        patches.append(PolygonPatch(
-            translate(phi_photodetector, -self.x_span / 2, -self.y_span / 2 + self.mzi_y_span),
-            edgecolor='none'))
-        colors.append(DEMO_PHOTODETECTOR_COLOR)
-        colors.append(DEMO_PHOTODETECTOR_COLOR)
-        for wvg_idx, wvg_path in enumerate([upper_path, lower_path]):
-            for wvg_poly_idx, polygon_point_list in enumerate(reversed(wvg_path.polygons)):
-                waveguide_field_patch = PolygonPatch(
-                    rotate(Polygon(polygon_point_list), angle=np.pi,
-                           origin=(0, 0), use_radians=True), edgecolor='none')
-                patches.append(waveguide_field_patch)
-                colors.append((0, 0, 0, 1))
+        colors.append(phi_color)
+        if phi_lower_label[basis] is not None:
+            patches.append(PolygonPatch(
+                translate(phi_photodetector, -self.x_span / 2, -self.y_span / 2 + self.mzi_y_span),
+                edgecolor='none'))
+            colors.append(phi_color)
+        # for wvg_idx, wvg_path in enumerate([upper_path, lower_path]):
+        #     for wvg_poly_idx, polygon_point_list in enumerate(reversed(wvg_path.polygons)):
+        #         waveguide_field_patch = PolygonPatch(
+        #             rotate(Polygon(polygon_point_list), angle=np.pi,
+        #                    origin=(0, 0), use_radians=True), edgecolor='none')
+        #         patches.append(waveguide_field_patch)
+        #         colors.append((0, 0, 0, 1))
         ax.add_collection(PatchCollection(patches, facecolors=colors))
 
     def plot_pod(self, ax, x_padding_factor: float=1.15, y_padding_factor: float=2, label_size=None):
@@ -349,6 +385,45 @@ class SimMZI(MZI):
         # colors.append((*DEMO_GAMMA_COLOR, 0.5))
         ax.add_collection(PatchCollection(patches, facecolors=colors))
 
+    def phase_shift_blocks(self, phase_shifter_thickness: float, pd_to_ps_ratio=0.25, shift: Tuple[float, float]=(0, 0)):
+        top_ps = box(
+            shift[0] - self.phase_shifter_arm_length / 2,
+            shift[1] - self.mzi_y_span / 2 - phase_shifter_thickness / 2,
+            shift[0] + self.phase_shifter_arm_length / 2 * (1 - pd_to_ps_ratio),
+            shift[1] + -self.mzi_y_span / 2 + phase_shifter_thickness / 2
+        )
+        top_pd = box(
+            shift[0] + self.phase_shifter_arm_length / 2 * (1 - pd_to_ps_ratio),
+            shift[1] - self.mzi_y_span / 2 - phase_shifter_thickness / 2,
+            shift[0] + self.phase_shifter_arm_length / 2,
+            shift[1] - self.mzi_y_span / 2 + phase_shifter_thickness / 2
+        )
+        bottom_ps = box(
+            shift[0] - self.phase_shifter_arm_length / 2,
+            shift[1] + self.mzi_y_span / 2 - phase_shifter_thickness / 2,
+            shift[0] + self.phase_shifter_arm_length / 2 * (1 - pd_to_ps_ratio),
+            shift[1] + self.mzi_y_span / 2 + phase_shifter_thickness / 2
+        )
+        bottom_pd = box(
+            shift[0] + self.phase_shifter_arm_length / 2 * (1 - pd_to_ps_ratio),
+            shift[1] + self.mzi_y_span / 2 - phase_shifter_thickness / 2,
+            shift[0] + self.phase_shifter_arm_length / 2,
+            shift[1] + self.mzi_y_span / 2 + phase_shifter_thickness / 2
+        )
+        cm_ps = box(
+            shift[0] - self.phase_shifter_arm_length / 2,
+            shift[1] - self.mzi_y_span / 2 - phase_shifter_thickness / 2,
+            shift[0] + self.phase_shifter_arm_length / 2 * (1 - pd_to_ps_ratio),
+            shift[1] + self.mzi_y_span / 2 + phase_shifter_thickness / 2
+        )
+        cm_pd = box(
+            shift[0] + self.phase_shifter_arm_length / 2 * (1 - pd_to_ps_ratio),
+            shift[1] - self.mzi_y_span / 2 - phase_shifter_thickness / 2,
+            shift[0] + self.phase_shifter_arm_length / 2,
+            shift[1] + self.mzi_y_span / 2 + phase_shifter_thickness / 2
+        )
+        return top_ps, top_pd, bottom_ps, bottom_pd, cm_ps, cm_pd
+
 
 def _mzi_poly_idx_to_layer_num(poly_idx):
     if poly_idx <= 2:
@@ -372,3 +447,19 @@ def _mzi_poly_idx_to_layer_color(poly_idx, use_hadamard: bool=False):
         return BEAMSPLITTER_COLOR if not use_hadamard else HADAMARD_COLOR
     else:
         return PHI_COLOR
+
+
+def _mzi_poly_idx_to_layer_color_demo(poly_idx):
+    if poly_idx <= 0:
+        return 0, 0, 0
+    elif poly_idx <= 3:
+        return DARK_RED
+    elif poly_idx <= 4:
+        return 0, 0, 0
+    elif poly_idx <= 7:
+        return DARK_RED
+    else:
+        return 0, 0, 0
+
+
+

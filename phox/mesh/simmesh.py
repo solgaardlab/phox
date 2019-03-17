@@ -1,4 +1,4 @@
-from typing import Callable
+from typing import Callable, Optional
 
 from descartes import PolygonPatch
 from matplotlib.collections import PatchCollection
@@ -15,10 +15,10 @@ from neurophox.phases import RDPhases
 from phoxy.components.photonics import MZI
 from phoxy.modules import RMPhotonicModule
 from phoxy.components.utils import BEAMSPLITTER_COLOR, THETA_COLOR, \
-    PHI_COLOR, GAMMA_COLOR, MAX_THETA, MAX_PHI, BACKGROUND_COLOR
+    PHI_COLOR, GAMMA_COLOR, MAX_THETA, MAX_PHI, BACKGROUND_COLOR, HADAMARD_COLOR
 
 
-class BigMesh(RMPhotonicModule):
+class SimMesh(RMPhotonicModule):
     def __init__(self, mzi: MZI, num_ports: int, end_length: float, depth: int=None,
                  layer: int=0, use_dmzi: bool=False):
         self.mzi = mzi
@@ -32,17 +32,19 @@ class BigMesh(RMPhotonicModule):
         self.simulation_patches_rgba = []
         self.demo_patches_rgba = []
         self.valid_mesh_points = np.asarray(_get_rectangular_mesh_points(num_ports, self.depth)).T
-        super(BigMesh, self).__init__(
+        super(SimMesh, self).__init__(
             mzi=mzi,
             num_ports=num_ports,
             end_length=end_length,
             layer=layer
         )
 
-    def _add_simulated_phases(self, ax, phase_shifter_thickness: float, phases: RDPhases, label_size=None):
+    def _add_simulated_phases(self, ax, phase_shifter_thickness: float, phases: RDPhases, label_size=None,
+                              layer_range=None):
         if phases is not None:
-            phase_shift_layer = phases.input_phase_shift_layer
             for idx in range(self.num_ports):
+                if layer_range and (layer_range[0] > 0):
+                    continue
                 center_x = self.end_length - self.mzi.phase_shifter_arm_length / 2 - \
                            self.mzi.phase_shifter_arm_length / 2 * (self.num_ports % 2)
                 center_y = idx * self.interport_distance
@@ -61,13 +63,18 @@ class BigMesh(RMPhotonicModule):
                             '$\\gamma_{'+str(idx + 1)+'}$', color=GAMMA_COLOR, horizontalalignment='center',
                             fontsize=label_size)
                 self.simulation_patches.append(gamma_phase_shift_patch)
-                self.simulation_patches_rgba.append((*GAMMA_COLOR, phase_shift_layer[idx] / MAX_PHI))
-            if phases.basis == ASYMMETRIC or phases.basis == SINGLEMODE:
-                theta_arrangement = phases.theta.checkerboard
-            else:
-                theta_arrangement = phases.theta.differential_mode_arrangement
-            valid_mesh_points = np.where(theta_arrangement != 0)
+                # print(phases.gamma[idx])
+                self.simulation_patches_rgba.append((*GAMMA_COLOR, 1))
+                # self.simulation_patches_rgba.append((*GAMMA_COLOR, np.mod(phases.gamma[idx], 2* np.pi) / MAX_PHI))
+            # if phases.basis == ASYMMETRIC or phases.basis == SINGLEMODE:
+            #     theta_arrangement = phases.theta.checkerboard
+            # else:
+            #     theta_arrangement = phases.theta.differential_mode_arrangement
+            theta_arrangement = phases.theta.checkerboard
+            valid_mesh_points = np.argwhere(theta_arrangement != 0)
             for point in valid_mesh_points:
+                if layer_range and (point[1] < layer_range[0] or point[1] > layer_range[1]):
+                    continue
                 center_x = point[1] * (self.mzi.mzi_x_span + self.mzi.x_span) / 2
                 center_y = point[0] * self.interport_distance
                 center_x += self.end_length + self.end_bend_dim[0] + self.mzi.mzi_x_span / 2 - self.mzi.phase_shifter_arm_length / 2 * (self.num_ports % 2)
@@ -85,15 +92,19 @@ class BigMesh(RMPhotonicModule):
                             '$\\theta_{'+str(point[0] + 1)+str(point[1] + 1)+'}$', color=THETA_COLOR,
                             horizontalalignment='center', fontsize=label_size)
                 self.simulation_patches.append(theta_phase_shift_patch)
-                self.simulation_patches_rgba.append((*THETA_COLOR, np.abs(theta_arrangement[point[0], point[1]]) / MAX_THETA))
-            if phases.basis == HYPERSPHERICAL or phases.basis == SINGLEMODE:
-                setpoint_arrangement = phases.setpoint.checkerboard
-                setpoint_varname = 'phi'
-            else:
-                setpoint_arrangement = phases.setpoint.push_pull_arrangement
-                setpoint_varname = 'zeta'
-            valid_mesh_points = np.where(setpoint_arrangement != 0)
+                # self.simulation_patches_rgba.append((*THETA_COLOR, np.mod(np.abs(theta_arrangement[point[0], point[1]]), 2 * np.pi) / MAX_THETA))
+                self.simulation_patches_rgba.append((*THETA_COLOR, 1))
+            # if phases.basis == HYPERSPHERICAL or phases.basis == SINGLEMODE:
+            #     setpoint_arrangement = phases.setpoint.checkerboard
+            #     setpoint_varname = 'phi'
+            # else:
+            #     setpoint_arrangement = phases.setpoint.push_pull_arrangement
+            #     setpoint_varname = 'zeta'
+            phi_arrangement = phases.phi.checkerboard
+            valid_mesh_points = _get_rectangular_mesh_points(dim=phi_arrangement.shape[0], num_layers=phi_arrangement.shape[1])
             for point in valid_mesh_points:
+                if layer_range and (point[1] < layer_range[0] or point[1] > layer_range[1]):
+                    continue
                 center_x = point[1] * (self.mzi.mzi_x_span + self.mzi.x_span) / 2
                 center_y = point[0] * self.interport_distance
                 center_x += self.end_length + self.end_bend_dim[0] + self.mzi.mzi_x_span - \
@@ -107,45 +118,50 @@ class BigMesh(RMPhotonicModule):
                 )
                 if label_size is not None:
                     ax.text(center_x - self.dim[0] / 2, center_y - self.dim[1] / 2 - phase_shifter_thickness * 0.75,
-                            f'$\\{setpoint_varname}'+'_{'+str(point[0] + 1)+str(point[1] + 1)+'}$', color=PHI_COLOR,
+                            f'$\phi'+'_{'+str(point[0] + 1)+str(point[1] + 1)+'}$', color=PHI_COLOR,
                             horizontalalignment='center', fontsize=label_size)
                 phi_phase_shift_patch = PolygonPatch(translate(phi_phase_shifter, -self.dim[0] / 2, -self.dim[1] / 2),
                                                      edgecolor='none')
                 self.simulation_patches.append(phi_phase_shift_patch)
-                self.simulation_patches_rgba.append((*PHI_COLOR, setpoint_arrangement[point[0], point[1]] / MAX_PHI))
+                # self.simulation_patches_rgba.append((*PHI_COLOR, np.mod(phi_arrangement[point[0], point[1]], 2 * np.pi) / MAX_PHI))
+                self.simulation_patches_rgba.append((*PHI_COLOR, 1))
 
-    def _construct_mesh_from_fields(self, fields: np.ndarray):
-        self.light_amplitude_mappable = ScalarMappable(cmap='hot')
+    def _construct_mesh_from_fields(self, fields: np.ndarray, layer_range=None):
+        self.light_amplitude_mappable = ScalarMappable(cmap='gray')
         self.light_amplitude_mappable.set_clim(0, 1)
         for wvg_idx, wvg_path in enumerate(self.fill_pattern):
             self.num_poly_layers = len(wvg_path.polygons)
             for wvg_poly_idx, polygon_point_list in enumerate(reversed(wvg_path.polygons)):
                 layer = _mzi_poly_idx_to_layer_num(wvg_poly_idx)
-                if layer > fields.shape[1] - 1:
-                    layer = fields.shape[1] - 1
+                if layer > fields.shape[0] - 1:
+                    layer = fields.shape[0] - 1
+                if layer_range and (layer // 4 < layer_range[0] or layer // 4 > layer_range[1]):
+                    continue
                 waveguide_field_patch = PolygonPatch(
                     rotate(translate(Polygon(polygon_point_list), -self.dim[0] / 2, -self.dim[1] / 2),
                                       angle=np.pi, origin=(0, 0), use_radians=True),
                     edgecolor='none')
                 self.simulation_patches.append(waveguide_field_patch)
                 self.simulation_patches_rgba.append(
-                    self.light_amplitude_mappable.to_rgba(np.abs(fields[self.num_ports - 1 - wvg_idx, layer]))
+                    self.light_amplitude_mappable.to_rgba(np.sqrt(np.abs(fields[layer, self.num_ports - 1 - wvg_idx])))
                 )
 
-    def plot_field_propagation(self, ax, fields: ERDFields, phases: RDPhases,
+    def plot_field_propagation(self, ax, fields: ERDFields, phases: RDPhases, layer_range=None,
                                phase_shifter_thickness=None, x_padding_factor=1.25, y_padding_factor=1.25,
                                replot=False, label_size=None):
 
         if not self.plotted_simulated_fields or replot:
-            ax.set_facecolor(BACKGROUND_COLOR)
+            self.simulation_patches = []
+            self.simulation_patches_rgba = []
+            ax.set_facecolor(list(np.asarray(BEAMSPLITTER_COLOR) * 0.75))
             ax.get_xaxis().set_ticks([])
             ax.get_yaxis().set_ticks([])
             ax.set_xlim((-x_padding_factor * self.dim[0] / 2, x_padding_factor * self.dim[0] / 2))
             ax.set_ylim((y_padding_factor * self.dim[1] / 2, -y_padding_factor * self.dim[1] / 2))
             if not phase_shifter_thickness:
                 phase_shifter_thickness = 3 * self.mzi.waveguide_width
-            self._add_simulated_phases(ax, phase_shifter_thickness, phases, label_size)
-            self._construct_mesh_from_fields(fields.fields)
+            self._add_simulated_phases(ax, phase_shifter_thickness, phases, label_size, layer_range=layer_range)
+            self._construct_mesh_from_fields(fields.fields, layer_range=layer_range)
             self.simulation_patch_collection = PatchCollection(
                 self.simulation_patches,
                 facecolors=self.simulation_patches_rgba

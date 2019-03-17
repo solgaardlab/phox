@@ -85,7 +85,7 @@ class MeshVisualizer:
         ax.scatter((rank + 2) * np.ones(self.dim), input_locations,
                    color=DARK_PURPLE, marker='s', zorder=2, s=self.marker_size)
 
-    def _plot_triangular_mzi_lines(self, ax, points):
+    def _plot_triangular_mzi_lines(self, ax, points, add_light_prop=False):
         input_locations = np.arange(self.dim) + 0.5
         rank = self.dim * 2 - 3
 
@@ -110,6 +110,36 @@ class MeshVisualizer:
 
         for line in lines_to_plot:
             ax.plot(line[0], line[1], color='black', zorder=1, linewidth=1)
+
+        if add_light_prop:
+            blue_lines_to_plot = []
+            purple_lines_to_plot = []
+            red_lines_to_plot = []
+            for point in np.asarray(points).T:
+                if point[0] - point[1] == self.dim - 2:
+                    if point[0] == self.dim - 1:
+                        blue_lines_to_plot.append(input_piece(point, upper=False))
+                    purple_lines_to_plot.append(output_piece(point, upper=False, rank=rank))
+                    if point[1] == self.dim - 1:
+                        purple_lines_to_plot.append(output_piece(point, upper=True, rank=rank))
+                    else:
+                        red_lines_to_plot.append(forward_connect(point, upper=True))
+                    ax.annotate(r'$T_{'+str(point[1])+'}$', (point[0] + 0.25, point[1] + 0.75),
+                                color=DARK_RED, fontsize=int(self.label_fontsize / 2),
+                                horizontalalignment='center', verticalalignment='center')
+                    ax.annotate(r'$x_{' + str(point[1]) + '}$', (rank + 2.5, point[1] - 0.5),
+                                color=DARK_PURPLE, fontsize=int(self.label_fontsize),
+                                horizontalalignment='left', verticalalignment='center')
+                    ax.annotate(r'$1 - T_{'+str(point[1])+'}$', (point[0] + 0.5, point[1] - 1),
+                                color=DARK_RED, fontsize=int(self.label_fontsize / 2),
+                                horizontalalignment='left', verticalalignment='top')
+
+            for line in blue_lines_to_plot:
+                ax.plot(line[0], line[1], color=DARK_BLUE, zorder=1, linewidth=2)
+            for line in red_lines_to_plot:
+                ax.plot(line[0], line[1], color='black', zorder=1, linewidth=2)
+            for line in purple_lines_to_plot:
+                ax.plot(line[0], line[1], color=DARK_PURPLE, zorder=1, linewidth=2)
 
         ax.scatter(-np.ones(self.dim), input_locations,
                    color=[0, 0.2, 0.6], marker='>', zorder=2, s=self.marker_size)
@@ -144,7 +174,7 @@ class MeshVisualizer:
         if include_alpha or include_smn:
             ax.scatter([rank + 2 + tunable_dim], [tunable_dim], color=DARK_RED, zorder=2, s=self.marker_size)
         if include_alpha:
-            ax.annotate(r'$\alpha_{mn}$', (rank + 2 + tunable_dim, tunable_dim - 0.5),
+            ax.annotate(r'$\alpha_{n\ell}$', (rank + 2 + tunable_dim, tunable_dim - 0.5),
                         color=DARK_RED, fontsize=int(3 * self.label_fontsize / 4),
                         horizontalalignment='center', verticalalignment='center')
         if include_smn:
@@ -153,12 +183,12 @@ class MeshVisualizer:
                         horizontalalignment='center', verticalalignment='center')
         ax.axis('off')
         ax.set_aspect('equal')
-        ax.set_ylim(tunable_dim + 4, -3)
+        ax.set_ylim(tunable_dim + 2, -3)
 
     def _plot_triangular_model(self, ax, labellers: Optional[List], include_alpha: bool):
         orig_points = get_triangular_mesh_points(self.dim)
         points = orig_points[1] - 1 + self.dim % 2, orig_points[0] + 1
-        self._plot_triangular_mzi_lines(ax, points)
+        self._plot_triangular_mzi_lines(ax, points, add_light_prop=labellers and 'light_prop' in labellers)
         if include_alpha:
             for point in np.asarray(points).T:
                 label_point = (point[0], point[1] - 0.5)
@@ -166,19 +196,22 @@ class MeshVisualizer:
                             fontsize=int(3 * self.label_fontsize / 4),
                             horizontalalignment='center', verticalalignment='center')
             ax.scatter([self.dim * 2 + 3], [self.dim / 2], color=DARK_RED, zorder=2, s=self.marker_size)
-            ax.annotate(r'$\alpha_{mn}$', (self.dim * 2 + 3, self.dim / 2 - 0.5),
+            ax.annotate(r'$\alpha_{n\ell}$', (self.dim * 2 + 3, self.dim / 2 - 0.5),
                         color=DARK_RED, fontsize=int(3 * self.label_fontsize / 4),
                         horizontalalignment='center', verticalalignment='center')
         if labellers is None:
             labellers = ['io', 'tri_tmn', 'tri_vertical_layer']
         for labeller in labellers:
+            if labeller == 'light_prop':
+                continue
             LABELLER_TO_LABEL_FUNC[labeller](ax, self.dim, self.label_fontsize)
         ax.scatter(points[0], points[1], color=DARK_RED, zorder=2, s=self.marker_size)
         ax.axis('off')
         ax.set_aspect('equal')
-        ax.set_ylim(self.dim + 4, -2)
+        ax.set_ylim(self.dim + 1, -1)
 
     def _plot_rrd_model(self, ax, embed=False):
+        half_checkerboard_points = get_checkerboard_points(self.dim, self.dim)
         checkerboard_points = get_checkerboard_points(self.dim, self.dim * 2)
         if embed:
             canvas_checkerboard_points = get_checkerboard_points(self.dim * 2, self.dim * 2)
@@ -188,10 +221,10 @@ class MeshVisualizer:
         else:
             points = checkerboard_points[1] + 1, checkerboard_points[0] + 1
         self._plot_rectangular_mzi_lines(ax, points)
-        ax.scatter(checkerboard_points[1] + 1,
-                   checkerboard_points[0] + 1, color=DARK_RED, zorder=2, s=self.marker_size)
-        ax.scatter(checkerboard_points[1] + 1 + self.dim,
-                   checkerboard_points[0] + 1, color=DARK_GREEN, zorder=2, s=self.marker_size)
+        ax.scatter(half_checkerboard_points[1] + 1,
+                   half_checkerboard_points[0] + 1, color=DARK_RED, zorder=2, s=self.marker_size)
+        ax.scatter(half_checkerboard_points[1] + 1 + self.dim,
+                   half_checkerboard_points[0] + 1, color=DARK_GREEN, zorder=2, s=self.marker_size)
         for i in range(self.dim + 1):
             ax.plot([i + 0.5, i + 0.5], [0, self.dim], color=DARK_RED, alpha=0.5)
             if i < self.dim:
@@ -207,10 +240,10 @@ class MeshVisualizer:
                     horizontalalignment='center', verticalalignment='center', color=DARK_GREEN
                 )
         for i in range(self.dim - 1):
-            ax.plot([1 + i % 2, self.dim + 3], [i + 1, i + 1], color=DARK_ORANGE, alpha=0.5, zorder=1, linestyle='--')
-            idx_str = f'{i + 1},{i + 2}'
+            ax.plot([1 + i % 2, 2 * self.dim + 3], [i + 1, i + 1], color=DARK_ORANGE, alpha=0.5, zorder=1, linestyle='--')
+            idx_str = f'{i + 1}'
             ax.annotate(
-                '$T_{'+idx_str+'}$', xy=(self.dim + 3.25, i + 1), fontsize=self.label_fontsize,
+                '$U_{'+idx_str+'}$', xy=(2 * self.dim + 3.25, i + 1), fontsize=self.label_fontsize,
                 horizontalalignment='left', verticalalignment='center', color=DARK_ORANGE
             )
         for i in range(self.dim):
@@ -220,10 +253,11 @@ class MeshVisualizer:
             )
         ax.axis('off')
         ax.set_aspect('equal')
-        ax.set_ylim(self.dim / 2 + 2, -2)
+        ax.set_ylim(self.dim + 1, -1)
+        plt.tight_layout()
 
     def _plot_cg_model(self, ax, embed=False):
-        self.dim = int(self.dim / 2)
+        self.dim = self.dim
         tunable_ranks, sampling_frequencies = get_default_coarse_grain_ranks(self.dim, use_cg_sequence=False)
         current_start_index = 0
         start_indices = []
@@ -238,7 +272,7 @@ class MeshVisualizer:
 
         checkerboard_points = get_checkerboard_points(self.dim, sum(tunable_ranks) + sum(sampling_frequencies))
         if embed:
-            canvas_checkerboard_points = get_checkerboard_points(self.dim, self.dim)
+            canvas_checkerboard_points = get_checkerboard_points(2 * self.dim, 2 * self.dim)
             points = canvas_checkerboard_points[1] + 1, canvas_checkerboard_points[0] + 1
             ax.scatter(canvas_checkerboard_points[1] + 1,
                        canvas_checkerboard_points[0] + 1, color='black', zorder=2, s=self.marker_size)
@@ -270,7 +304,7 @@ class MeshVisualizer:
                 horizontalalignment='center', verticalalignment='center', color=GRAY
             )
             ax.scatter(checkerboard_points[1] + 1 + start_idx,
-                        checkerboard_points[0] + 1, color=GRAY, zorder=2, s=self.marker_size)
+                       checkerboard_points[0] + 1, color=GRAY, zorder=2, s=self.marker_size)
             idx += 1
         for i in range(int(current_start_index), int(current_start_index) + 5):
             ax.plot([i + 0.5, i + 0.5], [0, self.dim - 0.5], color=DARK_RED, alpha=0.5)
@@ -285,10 +319,10 @@ class MeshVisualizer:
             horizontalalignment='center', verticalalignment='center', color=DARK_RED
         )
         for i in range(self.dim - 1):
-            ax.plot([1 + i % 2, self.dim + 3], [i + 1, i + 1], color=DARK_ORANGE, alpha=0.5, zorder=1, linestyle='--')
-            idx_str = f'{i + 1},{i + 2}'
+            ax.plot([1 + i % 2, 2 * self.dim+1], [i + 1, i + 1], color=DARK_ORANGE, alpha=0.5, zorder=1, linestyle='--')
+            idx_str = f'{i + 1}'
             ax.annotate(
-                '$T_{'+idx_str+'}$', xy=(self.dim + 3.25, i + 1), fontsize=self.label_fontsize,
+                '$U_{'+idx_str+'}$', xy=(2 * self.dim + 1.25, i + 1), fontsize=self.label_fontsize,
                 horizontalalignment='left', verticalalignment='center', color=DARK_ORANGE
             )
         for i in range(self.dim):
@@ -298,4 +332,113 @@ class MeshVisualizer:
             )
         ax.axis('off')
         ax.set_aspect('equal')
-        ax.set_ylim(self.dim + 2, -2)
+        ax.set_ylim(self.dim + 1, -1)
+        plt.tight_layout()
+
+    def _plot_binary_tree(self, ax, asymmetric=False):
+
+        def add_appendage(start, input: bool, upper: bool, opaque=False):
+            point_0 = (start[0] + (2 * input - 1), start[1] + (1 - 2 * upper))
+            point_1 = (point_0[0] + (2 * input - 1) * 1.5, point_0[1])
+            alpha = 1 - (opaque + 1) / 2
+            ax.plot((start[0], point_0[0]), (start[1], point_0[1]),
+                    color=(alpha, alpha, alpha), zorder=1)
+            ax.plot((point_0[0], point_1[0]), (point_0[1], point_1[1]),
+                    color=(alpha, alpha, alpha), zorder=1)
+            ax.scatter(point_1[0], point_1[1],
+                       color=DARK_PURPLE if opaque else LIGHT_PURPLE, marker='s', zorder=2,
+                       s=2 * self.marker_size)
+
+        if self.dim == 4:
+            points_list = [(0, 0), (2, 2), (2, -2)]
+            input_locations = [(4.5, 3), (4.5, -3), (4.5, 1), (4.5, -1)]
+            ax.plot((0, 3), (0, 3), color='black', zorder=1)
+            ax.plot((0, 3), (0, -3), color='black', zorder=1)
+            ax.plot((2, 3), (2, 1), color='black', zorder=1)
+            ax.plot((2, 3), (-2, -1), color='black', zorder=1)
+            for point in input_locations:
+                ax.plot((point[0] - 1.5, point[0]), (point[1], point[1]), color='black', zorder=1)
+                ax.scatter(*point, color=[0, 0.2, 0.6], marker='>', zorder=2, s=2 * self.marker_size)
+            for point in points_list:
+                ax.scatter(*point, color=DARK_RED, zorder=2, s=2 * self.marker_size)
+        elif self.dim == 8:
+            points_list = [(0, 0), (4, -4), (4, 4), (6, 2), (6, 6), (6, -6), (6, -2)]
+            input_locations = [(8.5, 7), (8.5, -7), (8.5, 5), (8.5, -5), (8.5, 3), (8.5, -3), (8.5, 1), (8.5, -1)]
+            ax.plot((0, 7), (0, 7), color='black', zorder=1)
+            ax.plot((0, 7), (0, -7), color='black', zorder=1)
+            ax.plot((6, 7), (6, 5), color='black', zorder=1)
+            ax.plot((6, 7), (-6, -5), color='black', zorder=1)
+            ax.plot((6, 7), (2, 3), color='black', zorder=1)
+            ax.plot((6, 7), (-2, -3), color='black', zorder=1)
+            ax.plot((4, 7), (-4, -1), color='black', zorder=1)
+            ax.plot((4, 7), (4, 1), color='black', zorder=1)
+            for point in input_locations:
+                ax.plot((point[0] - 1.5, point[0]), (point[1], point[1]), color='black', zorder=1)
+                ax.scatter(*point, color=[0, 0.2, 0.6], marker='>', zorder=2, s=2 * self.marker_size)
+            flip_appendage = False
+            for point in points_list:
+                if asymmetric and point == (6, -6):
+                    ax.plot((5, -5), (8.5, -5), color='black', zorder=1)
+                else:
+                    ax.scatter(*point, color=DARK_RED, zorder=2, s=2 * self.marker_size)
+                    add_appendage(point, input=False, upper=flip_appendage)
+                    flip_appendage = not flip_appendage
+            ax.plot((0, -6), (0, -6), color='black', zorder=1)
+            add_appendage((-6, -6), input=False, upper=True, opaque=True)
+        else:
+            raise NotImplementedError("Sad")
+
+    def _plot_linear_chain(self, ax, asymmetric=False):
+
+        def add_appendage(start, input: bool, upper: bool, opaque=False):
+            point_0 = (start[0] + (2 * input - 1), start[1] + (1 - 2 * upper))
+            point_1 = (point_0[0] + (2 * input - 1) * 1.5, point_0[1])
+            alpha = 1 - (opaque + 1) / 2
+            ax.plot((start[0], point_0[0]), (start[1], point_0[1]),
+                    color=(alpha, alpha, alpha), zorder=1)
+            ax.plot((point_0[0], point_1[0]), (point_0[1], point_1[1]),
+                    color=(alpha, alpha, alpha), zorder=1)
+            ax.scatter(point_1[0], point_1[1],
+                       color=DARK_PURPLE if opaque else LIGHT_PURPLE, marker='s', zorder=2,
+                       s=2 * self.marker_size)
+
+        if self.dim == 4:
+            points_list = [(0, 0), (2, 2), (-2, -2)]
+            input_locations = [(4.5, 3), (4.5, -3), (4.5, 1), (4.5, -1)]
+            ax.plot((0, 3), (0, 3), color='black', zorder=1)
+            ax.plot((0, 3), (0, -3), color='black', zorder=1)
+            ax.plot((2, 3), (2, 1), color='black', zorder=1)
+            ax.plot((2, 3), (-2, -1), color='black', zorder=1)
+            for point in input_locations:
+                ax.plot((point[0] - 1.5, point[0]), (point[1], point[1]), color='black', zorder=1)
+                ax.scatter(*point, color=[0, 0.2, 0.6], marker='>', zorder=2, s=2 * self.marker_size)
+            for point in points_list:
+                ax.scatter(*point, color=DARK_RED, zorder=2, s=2 * self.marker_size)
+        elif self.dim == 8:
+            points_list = [(0, 0), (-4, -4), (4, 4), (2, 2), (-2, -2), (6, 6), (-6, -6)]
+            input_locations = [(8.5, 7), (8.5, 5), (8.5, 3), (8.5, 1),
+                               (8.5, -1), (8.5, -3), (8.5, -5), (8.5, -7)]
+            ax.plot((0, 1), (0, -1), color='black', zorder=1)
+            ax.plot((2, 3), (2, 1), color='black', zorder=1)
+            ax.plot((-2, -1), (-2, -3), color='black', zorder=1)
+            ax.plot((4, 5), (4, 3), color='black', zorder=1)
+            ax.plot((-4, -3), (-4, -5), color='black', zorder=1)
+            ax.plot((6, 7), (6, 5), color='black', zorder=1)
+            ax.plot((-6, -5), (-6, -7), color='black', zorder=1)
+            ax.plot((7, -7), (7, -7), color='black', zorder=1)
+            for idx, point in enumerate(input_locations):
+                if idx == 0:
+                    idx = 1
+                ax.plot((point[0] - 1.5 - (idx - 1) * 2, point[0]), (point[1], point[1]), color='black', zorder=1)
+                ax.scatter(*point, color=[0, 0.2, 0.6], marker='>', zorder=2, s=2 * self.marker_size)
+            flip_appendage = False
+            for point in points_list:
+                if asymmetric and point == (6, -6):
+                    ax.plot((5, -5), (8.5, -5), color='black', zorder=1)
+                else:
+                    ax.scatter(*point, color=DARK_RED, zorder=2, s=2 * self.marker_size)
+                    add_appendage(point, input=False, upper=flip_appendage)
+            ax.plot((0, -6), (0, -6), color='black', zorder=1)
+            add_appendage((-6, -6), input=False, upper=True, opaque=True)
+        else:
+            raise NotImplementedError("Sad")

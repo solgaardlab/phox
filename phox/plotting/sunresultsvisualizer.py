@@ -24,9 +24,9 @@ class SUNResultsVisualizer:
         Returns:
 
         """
-        ax.set_xlabel(r"Layer ($n$)", fontsize=self.label_fontsize)
-        ax.set_ylabel(r"Input ($m$)", fontsize=self.label_fontsize)
-        ax.set_title(r"$\theta_{mn} / 2$", fontsize=self.title_fontsize)
+        ax.set_xlabel(r"Layer ($\ell$)", fontsize=self.label_fontsize)
+        ax.set_ylabel(r"Input ($n$)", fontsize=self.label_fontsize)
+        ax.set_title(r"$\theta_{n\ell} / 2$", fontsize=self.title_fontsize)
         plot_handle = ax.imshow(self.model_results["theta_checkerboards"][i], cmap="gray")
         cbar = plt.colorbar(
             mappable=plot_handle,
@@ -55,10 +55,10 @@ class SUNResultsVisualizer:
         Returns:
 
         """
-        ax.set_xlabel(r"Layer ($n$)", fontsize=self.label_fontsize)
-        ax.set_ylabel(r"Input ($m$)", fontsize=self.label_fontsize)
-        ax.set_title(r"$\phi_{mn}$", fontsize=self.title_fontsize)
-        plot_handle = ax.imshow(self.model_results["phi_checkerboards"][i], cmap="gray")
+        ax.set_xlabel(r"Layer ($\ell$)", fontsize=self.label_fontsize)
+        ax.set_ylabel(r"Input ($n$)", fontsize=self.label_fontsize)
+        ax.set_title(r"$\phi_{n\ell}$", fontsize=self.title_fontsize)
+        plot_handle = ax.imshow(np.mod(self.model_results["phi_checkerboards"][i], 2 * np.pi), cmap="gray")
         cbar = plt.colorbar(
             mappable=plot_handle,
             ticks=[0, np.pi, 2 * np.pi],
@@ -88,12 +88,12 @@ class SUNResultsVisualizer:
         """
         if "cg" in self.model_results["name"]:
             ax.set_title(
-                r"\textbf{Estimate Magnitude}: $|\hat{U}_{\mathrm{CGRD}}|$",
+                r"\textbf{Estimate Magnitude}: $|\hat{U}_{\mathrm{PR}}|$",
                 fontsize=self.title_fontsize
             )
         else:
             ax.set_title(
-                r"\textbf{Estimate Magnitude}: $|\hat{U}_{\mathrm{RD}}|$",
+                r"\textbf{Estimate Magnitude}: $|\hat{U}_{\mathrm{R}}|$",
                 fontsize=self.title_fontsize
             )
         plot_handle = ax.imshow(np.abs(self.model_results["estimates"][i]), cmap="hot")
@@ -116,12 +116,12 @@ class SUNResultsVisualizer:
         """
         if "cg" in self.model_results["name"]:
             ax.set_title(
-                r"\textbf{Error Magnitude}: $|\hat{U}_{\mathrm{CGRD}} - U|$",
+                r"\textbf{Error Magnitude}: $|\hat{U}_{\mathrm{PR}} - U|$",
                 fontsize=self.title_fontsize
             )
         else:
             ax.set_title(
-                r"\textbf{Error Magnitude}: $|\hat{U}_{\mathrm{RD}} - U|$",
+                r"\textbf{Error Magnitude}: $|\hat{U}_{\mathrm{R}} - U|$",
                 fontsize=self.title_fontsize
             )
         plot_handle = ax.imshow(self.model_results["errors"][i], cmap="hot")
@@ -142,7 +142,7 @@ class SUNResultsVisualizer:
         return thetas[1:], vals
 
     def _get_smoothed_phis(self, i, num_bins: int, smooth_window: Optional[int]=None):
-        phi_freqs, phis = np.histogram(self.model_results['phis'][i], bins=num_bins, normed=True)
+        phi_freqs, phis = np.histogram(np.mod(self.model_results['phis'][i], 2 * np.pi), bins=num_bins, normed=True)
         if smooth_window is not None:
             phi_freqs = savgol_filter(phi_freqs, smooth_window, 3)
         vals = phi_freqs / len(self.model_results['phis'][i]) * num_bins
@@ -165,7 +165,7 @@ class SUNResultsVisualizer:
         ax.set_xticks([0, np.pi / 2, np.pi])
         ax.set_xticklabels(["$0$", r"$\pi/4$", r"$\pi/2$"], fontsize=self.label_fontsize)
         ax.set_xlabel(r'$\theta / 2$', fontsize=self.label_fontsize)
-        ax.set_title(r'\textbf{Histogram}: $\theta_{mn} / 2$', fontsize=self.title_fontsize)
+        ax.set_title(r'\textbf{Histogram}: $\theta_{n\ell} / 2$', fontsize=self.title_fontsize)
         ax.get_yaxis().set_ticks([])
         return plot_handle
 
@@ -175,7 +175,7 @@ class SUNResultsVisualizer:
         ax.set_xticks([0., np.pi, 2 * np.pi])
         ax.set_xticklabels(["$0$", r"$\pi$", r"$2\pi$"], fontsize=self.label_fontsize)
         ax.set_xlabel(r'$\phi$', fontsize=self.label_fontsize)
-        ax.set_title(r'\textbf{Histogram}: $\phi_{mn}$', fontsize=self.title_fontsize)
+        ax.set_title(r'\textbf{Histogram}: $\phi_{n\ell}$', fontsize=self.title_fontsize)
         ax.get_yaxis().set_ticks([])
         return plot_handle
 

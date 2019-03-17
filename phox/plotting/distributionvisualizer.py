@@ -15,7 +15,7 @@ class DistributionVisualizer:
     def plot_theta_xi(self, ax, num_thetas: int=10000):
         theta = np.linspace(0, np.pi / 2, num_thetas)
         for alpha in self.alphas:
-            ax.plot(theta, np.power(np.sin(theta), 2 * alpha))
+            ax.plot(theta, np.power(np.cos(theta), 2 * alpha))
         ax.set_xlabel(r'Phase ($\theta / 2$)')
         ax.set_ylabel(r'Haar Phase ($\xi_\alpha$)')
         ax.set_xticks([0, np.pi / 4, np.pi / 2])
@@ -25,7 +25,7 @@ class DistributionVisualizer:
     def plot_xi_theta(self, ax, num_thetas: int=10000):
         theta = np.linspace(0, np.pi / 2, num_thetas)
         for alpha in self.alphas:
-            ax.plot(np.power(np.sin(theta), 2 * alpha), theta)
+            ax.plot(np.power(np.cos(theta), 2 * alpha), theta)
         ax.set_ylabel(r'Phase ($\theta / 2$)')
         ax.set_xlabel(r'Haar Phase ($\xi_\alpha$)')
         ax.set_yticks([0, np.pi / 4, np.pi / 2])
@@ -83,12 +83,13 @@ class DistributionVisualizer:
         inset_ax.set_ylim(0, 4 / np.pi)
         ax.legend([rf'$\alpha = {alpha}$' for alpha in self.alphas], fontsize=9)
 
-    def plot_haar_transmittivities(self, ax, num_samples: int=10000):
-        xi = np.linspace(-2, 2, num_samples)
+    def plot_haar_transmittivities(self, ax, num_samples: int=100000):
+        xi = np.concatenate((np.linspace(-3, 0, num_samples), np.linspace(0, 3, num_samples)))
         for alpha in self.alphas:
-            ax.plot(xi, transmittivity_haar_phase(xi, alpha))
-        ax.set_xlabel(r'Haar Phase ($\xi_\alpha$)')
-        ax.set_ylabel(r'Transmission Coefficient ($t = \sin(\theta(\xi_\alpha))$)')
+            ax.plot(xi, transmittivity_haar_phase(xi, alpha) ** 2)
+        ax.set_xlim(-2, 2)
+        ax.set_xlabel(r'Periodic Haar Phase ($\widetilde{\xi}_\alpha$)')
+        ax.set_ylabel(r'Transmission ($T = \sqrt[\alpha]{\xi(\widetilde{\xi}_\alpha)}$)')
         ax.legend([rf'$\alpha = {alpha}$' for alpha in self.alphas], fontsize=9)
 
     @staticmethod
@@ -99,3 +100,22 @@ class DistributionVisualizer:
         ax.plot(alphas, np.log(stds))
         ax.set_xlabel(r'$\alpha$')
         ax.set_ylabel(r'Log Standard Deviation ($\log_{10} \sigma_{\theta; \alpha}$)')
+
+    @staticmethod
+    def plot_theta_means(ax, alphas: List[int], pbar_handle: Callable = None):
+        uniform_xi = np.random.rand(1000000)
+        iterator = pbar_handle(alphas) if pbar_handle else alphas
+        stds = [np.mean(np.arcsin(np.power(uniform_xi, 1 / (2 * alpha)))) for alpha in iterator]
+        ax.plot(alphas, np.log(stds))
+        ax.set_xlabel(r'$\alpha$')
+        ax.set_ylabel(r'Log Standard Deviation ($\log_{10} \sigma_{\theta; \alpha}$)')
+
+    @staticmethod
+    def plot_log_reflectivity_means(ax, alphas: List[int], pbar_handle: Callable = None):
+        # uniform_xi = np.random.rand(1000000)
+        xi = np.linspace(0, 1, 100000)
+        iterator = pbar_handle(alphas) if pbar_handle else alphas
+        log_avgs = [np.log10(1 - np.mean(np.cos(np.arccos(np.power(xi, 1 / (2 * alpha)))))) for alpha in iterator]
+        ax.plot(alphas, log_avgs)
+        ax.set_xlabel(r'$\alpha$')
+        ax.set_ylabel(r'Log Reflection ($\log_{10} \langle |r|^2 \rangle$)')

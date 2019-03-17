@@ -6,9 +6,11 @@ from neurophox.helpers import get_alpha_checkerboard
 DARK_RED = (0.7, 0, 0)
 DARK_ORANGE = (0.7, 0.35, 0)
 DARK_BLUE = (0, 0.2, 0.6)
+LIGHT_BLUE = (0.5, 0.6, 0.8)
 DARK_GREEN = (0, 0.4, 0)
 GRAY = (0.5, 0.5, 0.5)
 DARK_PURPLE = (0.4, 0, 0.6)
+LIGHT_PURPLE = (0.7, 0.5, 0.8)
 
 
 def get_checkerboard_points(dim, rank):
@@ -39,12 +41,12 @@ def get_triangular_mesh_alpha(dim):
 
 
 def get_simulated_xi_histogram_from_theta(theta_samples: np.ndarray, alpha: int, num_bins: int, normed: bool=True):
-    xi_freqs, xis = np.histogram(np.power(np.sin(theta_samples), 2 * alpha), bins=num_bins, normed=normed)
+    xi_freqs, xis = np.histogram(np.power(np.cos(theta_samples), 2 * alpha), bins=num_bins, normed=normed)
     return xis[1:], xi_freqs
 
 
 def get_simulated_theta_histogram_from_xi(xi_samples: np.ndarray, alpha: int, num_bins: int, normed: bool=True):
-    theta_freqs, thetas = np.histogram(np.power(np.sin(xi_samples), 2 * alpha), bins=num_bins, normed=normed)
+    theta_freqs, thetas = np.histogram(np.power(np.cos(xi_samples), 2 * alpha), bins=num_bins, normed=normed)
     return np.asarray([0] + list(thetas[1:])), np.asarray([0] + list(theta_freqs))
 
 
@@ -52,7 +54,7 @@ def get_theta_distribution(alpha: int=1, num_thetas: int=10000, override_uniform
     thetas = np.linspace(0, np.pi / 2, num_thetas)
     theta_vals = np.linspace(0, np.pi, num_thetas)
     if not override_uniform:
-        theta_freqs = alpha * np.cos(thetas) * np.power(np.sin(thetas), 2 * alpha - 1)
+        theta_freqs = alpha * np.sin(thetas) * np.power(np.cos(thetas), 2 * alpha - 1)
     else:
         theta_freqs = np.pad(np.ones(int(num_thetas - 2)), ((1, 1),), 'constant') * 1 / np.pi
     return theta_vals, theta_freqs
@@ -81,8 +83,9 @@ def transmittivity_haar_phase(xi, alpha):
     xi_periodic_2 = np.mod(xi_shifted, 2)
     xi_periodic_4 = np.mod(xi_shifted, 4)
     xi_periodic_centered_2 = xi_periodic_2 - 1
-    transmittivity = np.sign(xi_periodic_4 - 2) * np.sign(xi_periodic_centered_2) * \
-        np.power(np.abs(xi_periodic_centered_2), 1 / (2 * alpha))
+    # transmittivity = np.sign(xi_periodic_4 - 2) * np.sign(xi_periodic_centered_2) * \
+    #     np.power(np.abs(xi_periodic_centered_2), 1 / (2 * alpha))
+    transmittivity = np.abs(np.power(np.abs(xi_periodic_centered_2), 1 / (2 * alpha)))
     return transmittivity
 
 
@@ -219,9 +222,9 @@ def make_vertical_layer_labels(ax, dim: int, fontsize: int):
 def make_givens_rotation_tmn_labels(ax, dim: int, fontsize: int):
     for i in range(dim - 1):
         ax.plot([1 + i % 2, dim + 3], [i + 1, i + 1], color=DARK_ORANGE, linestyle='--', alpha=0.5, zorder=1)
-        idx_str = f'{i + 1},{i + 2}'
+        idx_str = f'{i + 1}'
         ax.annotate(
-            '$T_{' + idx_str + '}$', xy=(dim + 3.25, i + 1), fontsize=fontsize,
+            '$U_{' + idx_str + '}$', xy=(dim + 3.25, i + 1), fontsize=fontsize,
             horizontalalignment='left', verticalalignment='center', color=DARK_ORANGE
         )
 
@@ -241,12 +244,15 @@ def make_tri_vertical_layer_labels(ax, dim: int, fontsize: int):
             )
 
 
-def make_tri_diagonal_layer_labels(ax, dim: int, fontsize: int):
+def make_tri_diagonal_layer_labels(ax, dim: int, fontsize: int, upright=False):
     for i in range(dim):
-        ax.plot([dim - 2 * i + 5, dim - i + 6], [dim, dim - i - 1], color=DARK_GREEN, alpha=0.5)
-        if i < dim - 1:
+        if upright:
+            ax.plot([dim - 2 * i + 5, dim - i + 6], [dim, dim - i - 1], color=DARK_GREEN, alpha=0.5)
+        else:
+            ax.plot([2 * i + 1, i], [dim, dim - i - 1], color=DARK_GREEN, alpha=0.5)
+        if i < dim:
             ax.annotate(
-                f'${dim - i - 1}$', xy=(dim - 2 * i + 4, dim + 0.25), fontsize=fontsize,
+                f'${dim - i}$', xy=(dim - 2 * i + 6 - 2 * upright, dim + 0.25), fontsize=fontsize,
                 horizontalalignment='center', verticalalignment='top', color=DARK_GREEN
             )
 
@@ -255,9 +261,9 @@ def make_tri_givens_rotation_tmn_labels(ax, dim: int, fontsize: int):
     width = 2 * dim - 3
     for i in range(dim - 1):
         ax.plot([-1 + dim - i, width + 3], [i + 1, i + 1], color=DARK_ORANGE, linestyle='--', alpha=0.5, zorder=1)
-        idx_str = f'{i + 1},{i + 2}'
+        idx_str = f'{i + 1}'
         ax.annotate(
-            '$T_{' + idx_str + '}$', xy=(width + 3.25, i + 1), fontsize=fontsize,
+            '$U_{' + idx_str + '}$', xy=(width + 3.25, i + 1), fontsize=fontsize,
             horizontalalignment='left', verticalalignment='center', color=DARK_ORANGE
         )
 
