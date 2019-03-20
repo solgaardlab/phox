@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 from neurophox.helpers import get_alpha_checkerboard
 
 DARK_RED = (0.7, 0, 0)
+LIGHT_RED = (0.85, 0.5, 0.5)
 DARK_ORANGE = (0.7, 0.35, 0)
 DARK_BLUE = (0, 0.2, 0.6)
 LIGHT_BLUE = (0.5, 0.6, 0.8)

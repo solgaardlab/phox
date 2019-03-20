@@ -4,6 +4,7 @@ from functools import partial
 
 from .helpers import *
 from neurophox.helpers import get_alpha_checkerboard, get_smn_checkerboard, get_default_coarse_grain_ranks
+from matplotlib.patches import Polygon
 
 LABELLER_TO_LABEL_FUNC = {
     'downright_diagonal_layer': make_downright_diagonal_layer_labels,
@@ -124,7 +125,7 @@ class MeshVisualizer:
                         purple_lines_to_plot.append(output_piece(point, upper=True, rank=rank))
                     else:
                         red_lines_to_plot.append(forward_connect(point, upper=True))
-                    ax.annotate(r'$T_{'+str(point[1])+'}$', (point[0] + 0.25, point[1] + 0.75),
+                    ax.annotate(r'$\boldsymbol{T}_{'+str(point[1])+'}$', (point[0] + 0.25, point[1] + 0.75),
                                 color=DARK_RED, fontsize=int(self.label_fontsize / 2),
                                 horizontalalignment='center', verticalalignment='center')
                     ax.annotate(r'$x_{' + str(point[1]) + '}$', (rank + 2.5, point[1] - 0.5),
@@ -335,7 +336,7 @@ class MeshVisualizer:
         ax.set_ylim(self.dim + 1, -1)
         plt.tight_layout()
 
-    def _plot_binary_tree(self, ax, asymmetric=False):
+    def _plot_binary_tree(self, ax):
 
         def add_appendage(start, input: bool, upper: bool, opaque=False):
             point_0 = (start[0] + (2 * input - 1), start[1] + (1 - 2 * upper))
@@ -346,7 +347,7 @@ class MeshVisualizer:
             ax.plot((point_0[0], point_1[0]), (point_0[1], point_1[1]),
                     color=(alpha, alpha, alpha), zorder=1)
             ax.scatter(point_1[0], point_1[1],
-                       color=DARK_PURPLE if opaque else LIGHT_PURPLE, marker='s', zorder=2,
+                       color=DARK_PURPLE if opaque else LIGHT_PURPLE, marker='s' if opaque else 'x', zorder=2,
                        s=2 * self.marker_size)
 
         if self.dim == 4:
@@ -363,6 +364,9 @@ class MeshVisualizer:
                 ax.scatter(*point, color=DARK_RED, zorder=2, s=2 * self.marker_size)
         elif self.dim == 8:
             points_list = [(0, 0), (4, -4), (4, 4), (6, 2), (6, 6), (6, -6), (6, -2)]
+            alpha_beta_list = [(4, 4), (2, 2), (2, 2), (1, 1), (1, 1), (1, 1), (1, 1)]
+            labels = [r"$\boldsymbol{T}_7$", r"$\boldsymbol{T}_5$", r"$\boldsymbol{T}_6$",
+                      r"$\boldsymbol{T}_2$", r"$\boldsymbol{T}_1$", r"$\boldsymbol{T}_4$", r"$\boldsymbol{T}_3$"]
             input_locations = [(8.5, 7), (8.5, -7), (8.5, 5), (8.5, -5), (8.5, 3), (8.5, -3), (8.5, 1), (8.5, -1)]
             ax.plot((0, 7), (0, 7), color='black', zorder=1)
             ax.plot((0, 7), (0, -7), color='black', zorder=1)
@@ -374,21 +378,47 @@ class MeshVisualizer:
             ax.plot((4, 7), (4, 1), color='black', zorder=1)
             for point in input_locations:
                 ax.plot((point[0] - 1.5, point[0]), (point[1], point[1]), color='black', zorder=1)
-                ax.scatter(*point, color=[0, 0.2, 0.6], marker='>', zorder=2, s=2 * self.marker_size)
+                ax.scatter(*point, color=DARK_GREEN, marker='>', zorder=2, s=2 * self.marker_size)
             flip_appendage = False
-            for point in points_list:
-                if asymmetric and point == (6, -6):
-                    ax.plot((5, -5), (8.5, -5), color='black', zorder=1)
-                else:
-                    ax.scatter(*point, color=DARK_RED, zorder=2, s=2 * self.marker_size)
-                    add_appendage(point, input=False, upper=flip_appendage)
-                    flip_appendage = not flip_appendage
+            for label, alpha_beta, point in zip(labels, alpha_beta_list, points_list):
+                alpha, beta = alpha_beta
+                ax.annotate(
+                    r"$"+str(beta)+"$", xy=(point[0], point[1] + 0.4), fontsize=self.label_fontsize,
+                    horizontalalignment='center', verticalalignment='bottom', color=DARK_BLUE
+                )
+                ax.annotate(
+                    r"$"+str(alpha)+"$", xy=(point[0], point[1] - 0.4), fontsize=self.label_fontsize,
+                    horizontalalignment='center', verticalalignment='top', color=DARK_RED
+                )
+                ax.annotate(
+                    label, xy=(point[0] + 0.5, point[1]), fontsize=self.label_fontsize * 1.2,
+                    horizontalalignment='right', verticalalignment='center', color=DARK_RED
+                )
+                ax.scatter(*point, color=DARK_RED, zorder=2, s=2 * self.marker_size)
+                add_appendage(point, input=False, upper=flip_appendage)
+                flip_appendage = not flip_appendage
             ax.plot((0, -6), (0, -6), color='black', zorder=1)
             add_appendage((-6, -6), input=False, upper=True, opaque=True)
+
+            lpoint = (-8, 0)
+
+            ax.annotate(
+                r"$\boldsymbol{T}_n$", xy=(lpoint[0] + 0.5, lpoint[1]), fontsize=self.label_fontsize * 1.2,
+                horizontalalignment='right', verticalalignment='center', color=DARK_RED
+            )
+            ax.annotate(
+                r"$\beta_n$", xy=(lpoint[0], lpoint[1] + 0.4), fontsize=self.label_fontsize,
+                horizontalalignment='center', verticalalignment='bottom', color=DARK_BLUE
+            )
+            ax.annotate(
+                r"$\alpha_n$", xy=(lpoint[0], lpoint[1] - 0.4), fontsize=self.label_fontsize,
+                horizontalalignment='center', verticalalignment='top', color=DARK_RED
+            )
+            ax.scatter(*lpoint, color=DARK_RED, zorder=2, s=2 * self.marker_size)
         else:
             raise NotImplementedError("Sad")
 
-    def _plot_linear_chain(self, ax, asymmetric=False):
+    def _plot_linear_chain(self, ax):
 
         def add_appendage(start, input: bool, upper: bool, opaque=False):
             point_0 = (start[0] + (2 * input - 1), start[1] + (1 - 2 * upper))
@@ -399,7 +429,7 @@ class MeshVisualizer:
             ax.plot((point_0[0], point_1[0]), (point_0[1], point_1[1]),
                     color=(alpha, alpha, alpha), zorder=1)
             ax.scatter(point_1[0], point_1[1],
-                       color=DARK_PURPLE if opaque else LIGHT_PURPLE, marker='s', zorder=2,
+                       color=DARK_PURPLE if opaque else LIGHT_PURPLE, marker='s' if opaque else 'x', zorder=2,
                        s=2 * self.marker_size)
 
         if self.dim == 4:
@@ -411,11 +441,14 @@ class MeshVisualizer:
             ax.plot((2, 3), (-2, -1), color='black', zorder=1)
             for point in input_locations:
                 ax.plot((point[0] - 1.5, point[0]), (point[1], point[1]), color='black', zorder=1)
-                ax.scatter(*point, color=[0, 0.2, 0.6], marker='>', zorder=2, s=2 * self.marker_size)
+                ax.scatter(*point, color=DARK_GREEN, marker='>', zorder=2, s=2 * self.marker_size)
             for point in points_list:
                 ax.scatter(*point, color=DARK_RED, zorder=2, s=2 * self.marker_size)
         elif self.dim == 8:
             points_list = [(0, 0), (-4, -4), (4, 4), (2, 2), (-2, -2), (6, 6), (-6, -6)]
+            labels = [r"$\boldsymbol{T}_4$", r"$\boldsymbol{T}_6$", r"$\boldsymbol{T}_2$", r"$\boldsymbol{T}_3$",
+                      r"$\boldsymbol{T}_5$", r"$\boldsymbol{T}_1$", r"$\boldsymbol{T}_7$"]
+            alpha_beta_list = [(4, 1), (6, 1), (2, 1), (3, 1), (5, 1), (1, 1), (7, 1)]
             input_locations = [(8.5, 7), (8.5, 5), (8.5, 3), (8.5, 1),
                                (8.5, -1), (8.5, -3), (8.5, -5), (8.5, -7)]
             ax.plot((0, 1), (0, -1), color='black', zorder=1)
@@ -432,13 +465,189 @@ class MeshVisualizer:
                 ax.plot((point[0] - 1.5 - (idx - 1) * 2, point[0]), (point[1], point[1]), color='black', zorder=1)
                 ax.scatter(*point, color=[0, 0.2, 0.6], marker='>', zorder=2, s=2 * self.marker_size)
             flip_appendage = False
-            for point in points_list:
-                if asymmetric and point == (6, -6):
-                    ax.plot((5, -5), (8.5, -5), color='black', zorder=1)
-                else:
-                    ax.scatter(*point, color=DARK_RED, zorder=2, s=2 * self.marker_size)
-                    add_appendage(point, input=False, upper=flip_appendage)
+            for label, alpha_beta, point in zip(labels, alpha_beta_list, points_list):
+                alpha, beta = alpha_beta
+                ax.annotate(
+                    r"$"+str(beta)+"$", xy=(point[0], point[1] + 0.4), fontsize=self.label_fontsize,
+                    horizontalalignment='center', verticalalignment='bottom', color=DARK_BLUE
+                )
+                ax.annotate(
+                    r"$"+str(alpha)+"$", xy=(point[0], point[1] - 0.4), fontsize=self.label_fontsize,
+                    horizontalalignment='center', verticalalignment='top', color=DARK_RED
+                )
+                ax.annotate(
+                    label, xy=(point[0] + 0.5, point[1]), fontsize=self.label_fontsize * 1.2,
+                    horizontalalignment='right', verticalalignment='center', color=DARK_RED
+                )
+                ax.scatter(*point, color=DARK_RED, zorder=2, s=2 * self.marker_size)
+                add_appendage(point, input=False, upper=flip_appendage)
             ax.plot((0, -6), (0, -6), color='black', zorder=1)
             add_appendage((-6, -6), input=False, upper=True, opaque=True)
         else:
             raise NotImplementedError("Sad")
+
+
+def plot_node(ax, center, top_ratio, bottom_ratio, top_nullify=False, scale=1):
+    top_nullify_color = GRAY if top_nullify else 'black'
+    bottom_nullify_color = 'black' if top_nullify else GRAY
+    top_nullify_p_color = GRAY if top_nullify else DARK_PURPLE
+    bottom_nullify_p_color = DARK_PURPLE if top_nullify else GRAY
+    top_nullify_d_color = DARK_PURPLE if top_nullify else LIGHT_PURPLE
+    bottom_nullify_d_color = LIGHT_PURPLE if top_nullify else DARK_PURPLE
+    bottom_power_color= LIGHT_RED if top_nullify else LIGHT_BLUE
+    top_power_color = LIGHT_BLUE if top_nullify else LIGHT_RED
+    bottom_power_label_color = DARK_RED if top_nullify else DARK_BLUE
+    top_power_label_color = DARK_BLUE if top_nullify else DARK_RED
+    bottom_nullify_style = 'x' if top_nullify else 's'
+    top_nullify_style = 's' if top_nullify else 'x'
+    top_label = r"$\boldsymbol{\alpha}$" if top_nullify else r"$\boldsymbol{\beta}$"
+    top_power_label = r"$\boldsymbol{P_\alpha}$" if top_nullify else r"$\boldsymbol{P_\beta}$"
+    bottom_label = r"$\boldsymbol{\beta}$" if top_nullify else r"$\boldsymbol{\alpha}$"
+    bottom_power_label = r"$\boldsymbol{P_\beta}$" if top_nullify else r"$\boldsymbol{P_\alpha}$"
+
+    ax.scatter(center[0], center[1], color=DARK_RED, zorder=2, s=100 * scale)
+    ax.plot((center[0] - scale, center[0]), (center[1] - scale, center[1]), color=top_power_color, linewidth=2.5, zorder=0)
+    ax.plot((center[0] - scale, center[0]), (center[1] + scale, center[1]), color=bottom_power_color, linewidth=2.5, zorder=0)
+    ax.plot((center[0] + scale, center[0]), (center[1] - scale, center[1]), color=bottom_nullify_p_color, linewidth=2.5, zorder=1)
+    ax.plot((center[0] + scale, center[0]), (center[1] + scale, center[1]), color=top_nullify_p_color, linewidth=2.5, zorder=1)
+    ax.plot((center[0] + scale, center[0] + 2 * scale),
+            (center[1] + scale, center[1] + scale),
+            color=top_nullify_p_color, linewidth=2.5, zorder=1)
+    ax.plot((center[0] + scale, center[0] + 2 * scale),
+            (center[1] - scale, center[1] - scale),
+            color=bottom_nullify_p_color, linewidth=2.5, zorder=1)
+    ax.scatter(center[0] + 2 * scale, center[1] - scale, color=top_nullify_d_color, marker=top_nullify_style, zorder=2, s=100 * scale)
+    ax.scatter(center[0] + 2 * scale, center[1] + scale, color=bottom_nullify_d_color, marker=bottom_nullify_style, zorder=2, s=100 * scale)
+    ax.add_patch(Polygon(np.asarray([[-scale, scale], [-(1 + bottom_ratio) * scale, (1 - bottom_ratio) * scale],
+                                     [-(1 + bottom_ratio) * scale, (1 + bottom_ratio) * scale]]) + np.asarray(center),
+                         color=bottom_power_color))
+    ax.add_patch(Polygon(np.asarray([[-scale, -scale], [-(1 + top_ratio) * scale, -(1 + top_ratio) * scale],
+                                     [-(1 + top_ratio) * scale, -(1 - top_ratio) * scale]]) + np.asarray(center),
+                         color=top_power_color))
+    ax.annotate(
+        bottom_power_label, xy=(center[0] - 0.5, center[1] - 0.55), fontsize=16,
+        horizontalalignment='left', verticalalignment='top', color=top_power_color
+    )
+    ax.annotate(
+        top_power_label, xy=(center[0] - 0.5, center[1] + 0.5), fontsize=20,
+        horizontalalignment='left', verticalalignment='bottom', color=bottom_power_color
+    )
+    ax.annotate(
+        bottom_label, xy=(center[0] - (1 + top_ratio / 2 + 0.05) * scale, center[1] - scale), fontsize=16,
+        horizontalalignment='center', verticalalignment='center', color=top_power_label_color
+    )
+    ax.annotate(
+        top_label, xy=(center[0] - (1 + bottom_ratio / 2 + 0.1) * scale, center[1] + scale), fontsize=20,
+        horizontalalignment='center', verticalalignment='center', color=bottom_power_label_color
+    )
+    ax.annotate(
+        r"$\boldsymbol{T}$", xy=(center[0] - 0.5, center[1]), fontsize=24,
+        horizontalalignment='right', verticalalignment='center', color=DARK_RED
+    )
+    ax.annotate(
+        r"$\boldsymbol{P_\alpha} + \boldsymbol{P_\beta}$", xy=(center[0] + 0.5, center[1]), fontsize=24,
+        horizontalalignment='left', verticalalignment='center', color=DARK_PURPLE
+    )
+
+
+def plot_node_induction(ax, center, top_nullify=False, scale=2, high_dim=False):
+    top_nullify_p_color = GRAY if top_nullify else DARK_PURPLE
+    bottom_nullify_p_color = DARK_PURPLE if top_nullify else GRAY
+    top_nullify_d_color = DARK_GREEN if top_nullify else LIGHT_PURPLE
+    bottom_nullify_d_color = LIGHT_PURPLE if top_nullify else DARK_GREEN
+    bottom_power_color = LIGHT_RED if top_nullify else LIGHT_BLUE
+    top_power_color = LIGHT_BLUE if top_nullify else LIGHT_RED
+
+    bottom_nullify_style = 'x' if top_nullify else '>'
+    top_nullify_style = '>' if top_nullify else 'x'
+
+    dcenter = (center[0] - scale * 2, center[1])
+    ax.scatter(dcenter[0], dcenter[1], color=DARK_RED, zorder=2, s=25 * scale)
+
+    ax.plot((center[0], center[0] + scale / 4), (center[1], center[1]),
+            color=DARK_PURPLE, linewidth=1.5, zorder=0)
+    ax.plot((dcenter[0] - scale / 4, dcenter[0]), (dcenter[1] - scale / 4, dcenter[1]),
+            color=top_power_color, linewidth=1, zorder=0)
+    ax.plot((dcenter[0] - scale / 4, dcenter[0]), (dcenter[1] + scale / 4, dcenter[1]),
+            color=bottom_power_color, linewidth=1, zorder=0)
+    ax.plot((dcenter[0] - scale / 2, dcenter[0] - scale / 4), (dcenter[1] - scale / 4, dcenter[1] - scale / 4),
+            color=top_power_color, linewidth=1, zorder=0)
+    ax.plot((dcenter[0] - scale / 2, dcenter[0] - scale / 4), (dcenter[1] + scale / 4, dcenter[1] + scale / 4),
+            color=bottom_power_color, linewidth=1, zorder=0)
+    ax.plot((dcenter[0] + scale / 4, dcenter[0]), (dcenter[1] - scale / 4, dcenter[1]),
+            color=bottom_nullify_p_color, linewidth=1.5, zorder=0)
+    ax.plot((dcenter[0] + scale / 4, dcenter[0]), (dcenter[1] + scale / 4, dcenter[1]),
+            color=top_nullify_p_color, linewidth=1.5, zorder=0)
+    ax.plot((dcenter[0] + scale / 4, dcenter[0] + scale / 2 + scale / 4 * (1 - top_nullify)),
+            (dcenter[1] + scale / 4, dcenter[1] + scale / 4),
+            color=top_nullify_p_color, linewidth=1.5, zorder=0)
+    ax.plot((dcenter[0] + scale / 4, dcenter[0] + scale / 2 + scale / 4 * top_nullify),
+            (dcenter[1] - scale / 4, dcenter[1] - scale / 4),
+            color=bottom_nullify_p_color, linewidth=1.5, zorder=0)
+    ax.scatter(dcenter[0] + scale / 2 + scale / 4 * (top_nullify), dcenter[1] - scale / 4,
+               color=top_nullify_d_color, marker=top_nullify_style,
+               zorder=2, s=25 * scale)
+    ax.scatter(dcenter[0] + scale / 2 + scale / 4 * (1 - top_nullify), dcenter[1] + scale / 4,
+               color=bottom_nullify_d_color, marker=bottom_nullify_style,
+               zorder=2, s=25 * scale)
+
+    ax.scatter(dcenter[0] + 3 * scale / 4, dcenter[1] + scale,
+               color=DARK_GREEN, marker='>',
+               zorder=2, s=25 * scale)
+    ax.scatter(dcenter[0] + 3 * scale / 4, dcenter[1] - scale,
+               color=DARK_GREEN, marker='>',
+               zorder=2, s=25 * scale)
+    ax.scatter(dcenter[0] + 3 * scale / 4, dcenter[1] + scale - scale / 4,
+               color=DARK_GREEN, marker='>',
+               zorder=2, s=25 * scale)
+    ax.scatter(dcenter[0] + 3 * scale / 4, dcenter[1] - scale + scale / 4,
+               color=DARK_GREEN, marker='>',
+               zorder=2, s=25 * scale)
+    ax.scatter(dcenter[0] - scale / 2, dcenter[1] - scale / 4,
+               color=DARK_GREEN, marker='>',
+               zorder=2, s=25 * scale)
+    ax.scatter(dcenter[0] - scale / 2, dcenter[1] + scale / 4,
+               color=DARK_GREEN, marker='>',
+               zorder=2, s=25 * scale)
+
+    ax.plot((dcenter[0] + 3 * scale / 4, dcenter[0] + scale), (dcenter[1] + scale, dcenter[1] + scale),
+            color='black', linewidth=1, zorder=0)
+    ax.plot((dcenter[0] + 3 * scale / 4, dcenter[0] + scale), (dcenter[1] - scale, dcenter[1] - scale),
+            color='black', linewidth=1, zorder=0)
+    ax.plot((dcenter[0] + 3 * scale / 4, dcenter[0] + scale), (dcenter[1] + 0.75 * scale, dcenter[1] + 0.75 * scale),
+            color='black', linewidth=1, zorder=0)
+    ax.plot((dcenter[0] + 3 * scale / 4, dcenter[0] + scale), (dcenter[1] - 0.75 * scale, dcenter[1] - 0.75 * scale),
+            color='black', linewidth=1, zorder=0)
+    if top_nullify:
+        ax.plot((dcenter[0] + 3 * scale / 4, dcenter[0] + scale),
+                (dcenter[1] - 0.25 * scale, dcenter[1] - 0.25 * scale),
+                color='black', linewidth=1, zorder=0)
+    else:
+        ax.plot((dcenter[0] + 3 * scale / 4, dcenter[0] + scale),
+                (dcenter[1] + 0.25 * scale, dcenter[1] + 0.25 * scale),
+                color='black', linewidth=1, zorder=0)
+
+    ax.annotate(
+        r"$\boldsymbol{U}_1$", xy=(dcenter[0], dcenter[1] - 0.75), fontsize=12,
+        horizontalalignment='center', verticalalignment='center', color=DARK_RED
+    )
+
+    ax.annotate(
+        r"$\boldsymbol{\vdots}$", xy=(dcenter[0] + 3 * scale / 4, dcenter[1] - 0.5 * scale), fontsize=20,
+        horizontalalignment='center', verticalalignment='center', color=DARK_GREEN
+    )
+
+    ax.annotate(
+        r"$\boldsymbol{\vdots}$", xy=(dcenter[0] + 3 * scale / 4, dcenter[1] + 0.5 * scale), fontsize=20,
+        horizontalalignment='center', verticalalignment='center', color=DARK_GREEN
+    )
+
+    ax.add_patch(Polygon(np.asarray([[center[0], center[1]], [center[0] - scale, center[1] - scale],
+                                     [center[0] - scale, center[1] + scale]]) + np.asarray(center),
+                         facecolor=LIGHT_PURPLE, edgecolor=DARK_PURPLE))
+
+    ax.annotate(
+        r"$\boldsymbol{R}_{N'}$", xy=(center[0] - scale / 2, center[1]), fontsize=16,
+        horizontalalignment='center', verticalalignment='center', color=DARK_PURPLE
+    )
+
