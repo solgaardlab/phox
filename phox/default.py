@@ -1,5 +1,24 @@
 from .mesh import SimMZI
 
+asi_stage = {
+    'properties': {
+
+    },
+    'serial': {
+        'baudrate': 115200,
+        'bytesize': 8,
+        'default_timeout': 0.1,
+        'id_command': "",
+        'id_response': "",
+        'parity': 'N',
+        'port': '/dev/cu.SLAB_USBtoUART',
+        'rtscts': False,
+        'stopbits': 1,
+        'terminator': '\r',
+        'xonxoff': False
+    }
+}
+
 # SIMULATION MZI DEFAULTS
 simulation_mzi = SimMZI(
     bend_dim=(10, 5),
