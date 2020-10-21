@@ -179,7 +179,7 @@ set_property_value.restype = ctypes.c_ulong  # ErrCode
 # Set property value
 set_property_value_f = xen.XC_SetPropertyValueF
 set_property_value_f.restype = ctypes.c_ulong  # ErrCode
-# set_property_value.argtypes = (ctypes.c_int32, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p)
+# set_property_value.argtypes = (ctypes.c_int32, ctypes.c_char_p, ctypes.c_double, ctypes.c_char_p)
 
 
 class XCamera:
@@ -201,7 +201,8 @@ class XCamera:
             raise RuntimeError(f'Error: {errcodes[error]}')
         return frame
 
-    def set_integration_time(self, integration_time: float):
-        return errcodes[set_property_value_f(self.handle, 'IntegrationTime', integration_time)]
+    def set_integration_time(self, integration_time: int):
+        return errcodes[set_property_value(self.handle, 'IntegrationTime'.encode('UTF-8'),
+                                           str(integration_time).encode('UTF-8'), 0)]
 
 

@@ -12,11 +12,14 @@ class MeshAOControl:
 
     def write_chans(self, channel_to_voltages: Dict[int, np.ndarray]):
         with nidaqmx.Task() as task:
-            for chan in channel_to_voltages:
-                task.ao_channels.add_ao_voltage_chan(chan.name)
-                m = task.write(voltages, auto_start=True)
+            num_samples = []
+            for channel_idx, voltages in channel_to_voltages.items():
+                task.ao_channels.add_ao_voltage_chan(self.ao_channels[channel_idx].name)
+                num_samples.append(task.write(voltages, auto_start=True))
+        return num_samples
 
     def write_chan(self, channel_idx: int, voltages: np.ndarray):
         with nidaqmx.Task() as task:
             task.ao_channels.add_ao_voltage_chan(self.ao_channels[channel_idx].name)
-            m = task.write(voltages, auto_start=True)
+            num_samples = task.write(voltages, auto_start=True)
+        return num_samples
