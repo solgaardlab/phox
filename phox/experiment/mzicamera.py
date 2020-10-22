@@ -1,4 +1,4 @@
-from ..instrumentation import ASI, MeshAOControl, XCamera
+from ..instrumentation import ASI, MeshAOControl, XCamera, LaserHP8164A
 from typing import Tuple, Callable
 import numpy as np
 import time
@@ -14,6 +14,7 @@ class MZICamera:
         self.stage = ASI()
         self.stage.connect()
         self.control = MeshAOControl()
+        self.laser = LaserHP8164A()
         self.home = home
         self.x_home, self.y_home = home
         self.dy = dy
@@ -50,7 +51,7 @@ class MZICamera:
             input_powers.append(input_power)
         return input_powers, output_powers
 
-    def io_centers(self, threshold: int, n: int, integration_time: int):
+    def io_centers(self, integration_time: int = 4000, threshold: int = 10000, n: int = 50):
         img = self.current_image(n)
         self.camera.set_integration_time(integration_time)
         time.sleep(0.2)
@@ -59,6 +60,18 @@ class MZICamera:
         contours = [contour for contour in contours if contour.area > 2]
         contour_centers = [(int(contour.centroid.y), int(contour.centroid.x)) for contour in contours]
         return contour_centers[0], contour_centers[-1]
+
+    def calibrate_power(self, min_power: float = 0, max_power: float = 4.2, n_steps: int = 421, n_avg: int = 50,
+                        window_size: float = 10):
+        input_center, _ = self.io_centers()
+        laser_powers = np.range(min_power, max_power, n_steps)
+        measured_powers = []
+        for power in laser_powers:
+            self.laser.set_power(power)
+            time.sleep(0.5)
+            img = self.current_image(n_avg)
+            measured_powers.append(_get_grating_spot(img, input_center, window_size)[0])
+        return laser_powers, np.asarray(measured_powers)
 
 
 def _get_grating_spot(img, center, window_size):
