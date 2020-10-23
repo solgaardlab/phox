@@ -19,6 +19,7 @@ ERROR_CODES = {
 
 fpr = r'[-+]?(?:[0-9]*[.])?[0-9]+'
 
+
 class Axis(object):
     X = 0
     Y = 1
@@ -44,8 +45,8 @@ class ASI(SerialMixin, Stage):
     Object responsible for managing ASI Imaging stage.
     """
 
-    def __init__(self, lib=None, x_limits=(-10, 10), y_limits=(-10, 30)):
-        SerialMixin.__init__(self, lib)
+    def __init__(self, x_limits=(-10, 10), y_limits=(-10, 30)):
+        SerialMixin.__init__(self)
         self.stage_config = {
             'X Limits': x_limits,
             'Y Limits': y_limits,
@@ -80,16 +81,16 @@ class ASI(SerialMixin, Stage):
         Command(send_expr='~', read_expr='RESET:', timeout=5.0).execute(self)
 
     def where(self):
-        readExpr = f':A\s({fpr})\s({fpr})\s\\r\\n'
-        ret = Command(send_expr='WHERE X Y', read_expr=readExpr, group=(1, 2)).execute(self)
+        read_expr = f':A\s({fpr})\s({fpr})\s\\r\\n'
+        ret = Command(send_expr='WHERE X Y', read_expr=read_expr, group=(1, 2)).execute(self)
         return tuple(self.encoder_to_mm(float(_)) for _ in ret)
 
     def halt(self):
         Command(send_expr='HALT', read_expr=r'(:A|:N-21)').execute(self)
 
     def speed(self):
-        readExpr = f':A\sX=({fpr})\s+Y=({fpr})\s\\r\\n'
-        ret = Command(send_expr='S X? Y?', read_expr=readExpr, group=(1, 2)).execute(self)
+        read_expr = f':A\sX=({fpr})\s+Y=({fpr})\s\\r\\n'
+        ret = Command(send_expr='S X? Y?', read_expr=read_expr, group=(1, 2)).execute(self)
         return tuple((float(_)) for _ in ret)
 
     def setSpeed(self, x, y):
@@ -106,10 +107,10 @@ class ASI(SerialMixin, Stage):
     def who(self): return Command(send_expr='WHO', read_expr=r':A\s(\S+)\s+\r\n', group=1).execute(self)
     def version(self): return Command(send_expr='VERSION', read_expr=r':A Version:\s(\S+)\s', group=1).execute(self)
 
-    def isMoving(self):
+    def is_moving(self):
         return Command(send_expr='/', read_expr=r'(\w)\r\n', group=1).execute(self) == 'B'
 
-    def setHome(self):
+    def set_home(self):
         raise NotImplementedError('Needs to be defined')
 
     def home(self):
@@ -136,20 +137,6 @@ class ASI(SerialMixin, Stage):
 
         Command(send_expr='SL {0} {1}'.format(*low_args), read_expr=':A').execute(self)
         Command(send_expr='SU {0} {1}'.format(*high_args), read_expr=':A').execute(self)
-
-    def connect(self):
-        """
-        Set and attempt establishing a connection to port.
-        :param port: string; communications port (e.g. 'COM1')
-        :return: None
-        """
-
-        if not self.is_online():
-            self.open()
-        self.verify()
-        if self.is_verified():
-            self.setup()
-        return self
 
     def setup(self):
         self.set_button_enable(zero=self.stage_config['Zero Button'])
@@ -192,10 +179,6 @@ class ASI(SerialMixin, Stage):
         return enc * 1e-4
 
 
-PICARD_DLL_PATH = os.path.dirname(__file__) + '/PiUsb.dll'
-c_int_p = ctypes.POINTER(ctypes.c_int)
-
-
 class Errors(object):
 
     PI_NO_ERROR = 0
@@ -217,20 +200,19 @@ class Command(object):
         self.read_expr = read_expr
         self.group = group
         self.timeout = timeout
-
         self.last_sent = ''
 
-    def execute(self, serial, **kwargs):
-        self.send(serial, **kwargs)
-        return self.verify(serial)
+    def execute(self, ser, **kwargs):
+        self.write(ser, **kwargs)
+        return self.verify(ser)
 
-    def send(self, serial, **kwargs):
+    def write(self, ser, **kwargs):
         formatted = self.send_expr.format(**kwargs)  # Format the message to send
-        serial.send(formatted)
+        ser.write(formatted)
         self.last_sent = formatted
 
-    def verify(self, serial):
-        msg, is_match = serial.read_until(expr=self.read_expr, group_num=self.group, timeout=self.timeout)
+    def verify(self, ser):
+        msg, is_match = ser.read_until(expr=self.read_expr, group_num=self.group, timeout=self.timeout)
         if not is_match:
             logger.warning(f'Command {self.last_sent} not validated. The following message was retrieved: {msg}')
         return msg
