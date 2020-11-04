@@ -1,6 +1,6 @@
 __author__ = 'Joe Landry'
 
-from .base import SerialMixin
+from .serial import SerialMixin
 import logging as logger
 import abc
 import numpy as np

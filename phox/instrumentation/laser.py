@@ -3,11 +3,11 @@ HEWLETT-PACKARD, 8164A (Tunable Laser Source)
 We use GPIB-USB Interface to communicate
 """
 import time
-from .base import SerialMixin
+from .serial import SerialMixin
 
 
 class LaserHP8164A(SerialMixin):
-    def __init__(self, port: str = '/dev/ttyUSB4', source_idx: int = 0):
+    def __init__(self, port: str = '/dev/ttyUSB3', source_idx: int = 0):
         self.source_idx = source_idx
         SerialMixin.__init__(self,
                              port=port,
@@ -35,7 +35,3 @@ class LaserHP8164A(SerialMixin):
         self.write('wav:swe 1')
         time.sleep(timeout)
         self.write('wav:swe 0')
-
-# power_set(my_instrument, 3)
-# wavelength_sweep(my_instrument, 1530, 1560, 10, 10, 10)
-# wavelength_sweep(my_instrument, 1550)
