@@ -8,7 +8,8 @@ from typing import List, Dict
 class MeshAOControl:
     def __init__(self):
         self.system = nidaqmx.system.System.local()
-        self.ao_channels = [channel for device in self.system.devices for channel in device.ao_physical_chans]
+        self.ao_channels = [channel for device in self.system.devices
+                            for channel in device.ao_physical_chans]
 
     def write_chans(self, channel_to_voltages: Dict[int, np.ndarray]):
         with nidaqmx.Task() as task:

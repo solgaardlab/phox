@@ -1,107 +1,48 @@
 import ctypes
 
-#add types
+# add types
+from collections import Callable
+
 import numpy as np
 from numpy.ctypeslib import ndpointer
+from threading import Thread, Lock
+import logging
+logger = logging.getLogger()
+
+from typing import Optional
 
 lusb = ctypes.CDLL('/usr/local/lib/libusb-1.0.so', mode=ctypes.RTLD_GLOBAL)
 xen = ctypes.CDLL('libxeneth.so')
 
 # C Enumerations
 
-# Error codes
-I_OK = 0
-I_DIRTY = 1
-E_BUG = 10000
-E_NOINIT = 10001
-E_LOGICLOADFAILED = 10002
-E_INTERFACE_ERROR = 10003
-E_OUT_OF_RANGE = 10004
-E_NOT_SUPPORTED = 10005
-E_NOT_FOUND = 10006
-E_FILTER_DONE = 10007
-E_NO_FRAME = 10008
-E_SAVE_ERROR = 10009
-E_MISMATCHED = 10010
-E_BUSY = 10011
-E_INVALID_HANDLE = 10012
-E_TIMEOUT = 10013
-E_FRAMEGRABBER = 10014
-E_NO_CONVERSION = 10015
-E_FILTER_SKIP_FRAME = 10016
-E_WRONG_VERSION = 10017
-E_PACKET_ERROR = 10018
-E_WRONG_FORMAT = 10019
-E_WRONG_SIZE = 10020
-E_CAPSTOP = 10021
-E_OUT_OF_MEMORY = 10022
-E_RFU = 10023
-
 # Used for conversion to string
-errcodes = {I_OK: 'I_OK',
-            I_DIRTY: 'I_DIRTY',
-            E_BUG: 'E_BUG',
-            E_NOINIT: 'E_NOINIT',
-            E_LOGICLOADFAILED: 'E_LOGICLOADFAILED',
-            E_INTERFACE_ERROR: 'E_INTERFACE_ERROR',
-            E_OUT_OF_RANGE: 'E_OUT_OF_RANGE',
-            E_NOT_SUPPORTED: 'E_NOT_SUPPORTED',
-            E_NOT_FOUND: 'E_NOT_FOUND',
-            E_FILTER_DONE: 'E_FILTER_DONE',
-            E_NO_FRAME: 'E_NO_FRAME',
-            E_SAVE_ERROR: 'E_SAVE_ERROR',
-            E_MISMATCHED: 'E_MISMATCHED',
-            E_BUSY: 'E_BUSY',
-            E_INVALID_HANDLE: 'E_INVALID_HANDLE',
-            E_TIMEOUT: 'E_TIMEOUT',
-            E_FRAMEGRABBER: 'E_FRAMEGRABBER',
-            E_NO_CONVERSION: 'E_NO_CONVERSION',
-            E_FILTER_SKIP_FRAME: 'E_FILTER_SKIP_FRAME',
-            E_WRONG_VERSION: 'E_WRONG_VERSION',
-            E_PACKET_ERROR: 'E_PACKET_ERROR',
-            E_WRONG_FORMAT: 'E_WRONG_FORMAT',
-            E_WRONG_SIZE: 'E_WRONG_SIZE',
-            E_CAPSTOP: 'E_CAPSTOP',
-            E_OUT_OF_MEMORY: 'E_OUT_OF_MEMORY',
-            E_RFU: 'E_RFU'}  # The last one is uncertain
-
-# Frame types, ulong
-FT_UNKNOWN = -1
-FT_NATIVE = 0
-FT_8_BPP_GRAY = 1
-FT_16_BPP_GRAY = 2
-FT_32_BPP_GRAY = 3
-FT_32_BPP_RGBA = 4
-FT_32_BPP_RGB = 5
-FT_32_BPP_BGRA = 6
-FT_32_BPP_BGR = 7
-
-# Pixel size in bytes, used for conversion
-pixel_sizes = {FT_UNKNOWN: 0,  # Unknown
-               FT_NATIVE: 0,  # Unknown, ask with get_frame_type
-               FT_8_BPP_GRAY: 1,
-               FT_16_BPP_GRAY: 2,
-               FT_32_BPP_GRAY: 4,
-               FT_32_BPP_RGBA: 4,
-               FT_32_BPP_RGB: 4,
-               FT_32_BPP_BGRA: 4,
-               FT_32_BPP_BGR: 4}
-
-# GetFrameFlags, ulong
-XGF_Blocking = 1
-XGF_NoConversion = 2
-XGF_FetchPFF = 4
-XGF_RFU_1 = 8
-XGF_RFU_2 = 16
-XGF_RFU_3 = 32
-
-# LoadCalibration flags
-# Starts the software correction filter after unpacking the
-# calibration data
-XLC_StartSoftwareCorrection = 1
-XLC_RFU_1 = 2
-XLC_RFU_2 = 4
-XLC_RFU_3 = 8
+errcodes = {0: 'I_OK',
+            1: 'I_DIRTY',
+            10000: 'E_BUG',
+            10001: 'E_NOINIT',
+            10002: 'E_LOGICLOADFAILED',
+            10003: 'E_INTERFACE_ERROR',
+            10004: 'E_OUT_OF_RANGE',
+            10005: 'E_NOT_SUPPORTED',
+            10006: 'E_NOT_FOUND',
+            10007: 'E_FILTER_DONE',
+            10008: 'E_NO_FRAME',
+            10009: 'E_SAVE_ERROR',
+            10010: 'E_MISMATCHED',
+            10011: 'E_BUSY',
+            10012: 'E_INVALID_HANDLE',
+            10013: 'E_TIMEOUT',
+            10014: 'E_FRAMEGRABBER',
+            10015: 'E_NO_CONVERSION',
+            10016: 'E_FILTER_SKIP_FRAME',
+            10017: 'E_WRONG_VERSION',
+            10018: 'E_PACKET_ERROR',
+            10019: 'E_WRONG_FORMAT',
+            10020: 'E_WRONG_SIZE',
+            10021: 'E_CAPSTOP',
+            10022: 'E_OUT_OF_MEMORY',
+            10023: 'E_RFU'}  # The last one is uncertain
 
 # C functions
 
@@ -186,23 +127,71 @@ class XCamera:
     def __init__(self, name: str = 'cam://0'):
         self.handle = open_camera(name.encode('UTF-8'), 0, 0)
         self.shape = (get_frame_height(self.handle), get_frame_width(self.handle))
+        self._current_frame = None
+        self.calibrate = False
+        self.thread = None
+        self.started_frame_loop = False
+        self.started = False
+        self.frame_lock = Lock()
+        self.background_reference = None
 
-    def start(self):
+    def start(self) -> int:
+        self.started = True
         return errcodes[start_capture(self.handle)]
 
-    def stop(self):
+    def stop(self) -> int:
+        self.started = False
         return errcodes[stop_capture(self.handle)]
 
-    def frame(self):
-        frame = np.zeros(shape=self.shape, dtype=np.int16)
+    def start_frame_loop(self, on_frame: Optional[Callable] = None):
+        if self.started_frame_loop:
+            logger.warning('Cannot start a frame loop that has already been started. '
+                           'Use end_frame_loop to stop current frame loop.')
+            return
+        self.started_frame_loop = True
+        self.thread = Thread(target=self._frame_loop, args=(on_frame,))
+        self.thread.start()
+
+    def _frame_loop(self, on_frame: Optional[Callable] = None):
+        while self.started_frame_loop:
+            frame = self._frame()
+            if on_frame is not None:
+                on_frame(frame)
+            with self.frame_lock:
+                self._current_frame = frame
+
+    def stop_frame_loop(self):
+        self.started_frame_loop = False
+        self.thread.join()
+
+    def frame(self) -> np.ndarray:
+        if self.started_frame_loop:
+            with self.frame_lock:
+                frame = self._current_frame.copy()
+            return frame
+        else:
+            return self._frame()
+
+    def _frame(self) -> np.ndarray:
+        if not self.started:
+            raise RuntimeError('Camera must be started to capture a frame.')
+        frame = np.zeros(shape=self.shape, dtype=np.uint16)
         error = get_frame(self.handle, get_frame_type(self.handle), 1,
-                          frame.ctypes.data_as(ndpointer(np.int16)), frame.nbytes)
+                          frame.ctypes.data_as(ndpointer(np.uint16)), frame.nbytes)
         if error != 0:
-            raise RuntimeError(f'Error: {errcodes[error]}')
-        return frame
+            raise RuntimeError(f'Camera Error: {errcodes[error]}')
+
+        return frame if self.background_reference is None else frame.astype(np.float) - self.background_reference.astype(np.float)
 
     def set_integration_time(self, integration_time: int):
         return errcodes[set_property_value(self.handle, 'IntegrationTime'.encode('UTF-8'),
                                            str(integration_time).encode('UTF-8'), 0)]
 
+    def load_calibration(self, filepath: str):
+        self.calibrate = True
+        return errcodes[load_calibration(self.handle, filepath.encode('UTF-8'), 1)]
 
+    def __exit__(self):
+        if self.started_frame_loop:
+            self.stop_frame_loop()
+        self.stop()

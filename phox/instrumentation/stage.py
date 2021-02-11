@@ -38,15 +38,14 @@ class Stage(object):
 
 
 class ASI(SerialMixin, Stage):
-
     MAX_SPEED = 7.5  # [mm/s]
 
     """
     Object responsible for managing ASI Imaging stage.
     """
 
-    def __init__(self, x_limits=(-10, 10), y_limits=(-10, 30)):
-        SerialMixin.__init__(self)
+    def __init__(self, port='/dev/ttyUSB2', x_limits=(-10, 10), y_limits=(-10, 30)):
+        SerialMixin.__init__(self, port)
         self.stage_config = {
             'X Limits': x_limits,
             'Y Limits': y_limits,
@@ -93,7 +92,7 @@ class ASI(SerialMixin, Stage):
         ret = Command(send_expr='S X? Y?', read_expr=read_expr, group=(1, 2)).execute(self)
         return tuple((float(_)) for _ in ret)
 
-    def setSpeed(self, x, y):
+    def set_speed(self, x, y):
         """
         Set stage speed
         :param x: x-axis speed [mm/s]
@@ -104,8 +103,14 @@ class ASI(SerialMixin, Stage):
                 '' if y is None else 'Y={0}'.format(np.clip(y, 0.0, self.MAX_SPEED))]
         Command(send_expr='S {0} {1}'.format(*args), read_expr=':A').execute(self)
 
-    def who(self): return Command(send_expr='WHO', read_expr=r':A\s(\S+)\s+\r\n', group=1).execute(self)
-    def version(self): return Command(send_expr='VERSION', read_expr=r':A Version:\s(\S+)\s', group=1).execute(self)
+    def who(self):
+        return Command(send_expr='WHO', read_expr=r':A\s(\S+)\s+\r\n', group=1).execute(self)
+
+    def info(self, y: bool = False):
+        return Command(send_expr='INFO Y' if y else 'INFO X', read_expr=f':A\s{fpr}\\r\\n', group=1).execute(self)
+
+    def version(self):
+        return Command(send_expr='VERSION', read_expr=r':A Version:\s(\S+)\s', group=1).execute(self)
 
     def is_moving(self):
         return Command(send_expr='/', read_expr=r'(\w)\r\n', group=1).execute(self) == 'B'
@@ -120,6 +125,9 @@ class ASI(SerialMixin, Stage):
 
     def zero(self):
         Command(send_expr='Z', read_expr=':A').execute(self)
+
+    def kp(self, val: float, y: bool = True):
+        return Command(send_expr=f'KP Y={val}' if y else f'KP X={val}', read_expr=':A').execute(self)
 
     def set_limits(self, x_lim=None, y_lim=None):
         low_args, high_args = [], []
@@ -145,7 +153,8 @@ class ASI(SerialMixin, Stage):
     # --- Scanning ---
     def setup_scan(self, x_lim, y_lim, num_lines=1, serpentine=False):
         # X, Y, Z = 0 define unused axes. F=0 means raster, 1 means serpentine
-        Command(send_expr='SN X=1 Y=2 Z=0 F={0}'.format(int(serpentine)), read_expr=':A').execute(self)  # TODO: Change fast axis using config file
+        Command(send_expr='SN X=1 Y=2 Z=0 F={0}'.format(int(serpentine)), read_expr=':A').execute(
+            self)  # TODO: Change fast axis using config file
         Command(send_expr='NR X={0} Y={1}'.format(x_lim[0], x_lim[1])).execute(self)
         Command(send_expr='NV X={0} Y={1} Z={2} F=1.0'.format(y_lim[0], y_lim[1], num_lines)).execute(self)
         Command(send_expr='TTL X=1', read_expr=':A').execute(self)  # Unsure if necessary
@@ -173,14 +182,26 @@ class ASI(SerialMixin, Stage):
         Command(send_expr=f'BE Z=1111{zero}{home}{at}{joystick}', read_expr=':A').execute(self)
 
     def mm_to_encoder(self, mm):
-        return round(mm*1e4)
+        return round(mm * 1e4)
 
     def encoder_to_mm(self, enc):
         return enc * 1e-4
 
+    def aa_query(self):
+        read_expr = f':A\sX=({fpr})\s+Y=({fpr})\s\\r\\n'
+        return Command(send_expr=f'AA X? Y? Z?', read_expr=read_expr).execute(self)
+
+    def aa_set(self, val: int = 85, y: bool = False):
+        return Command(send_expr=f'AA Y={val}' if y else f'AA X={val}', read_expr=':A').execute(self)
+
+    def aa(self, y: bool = False):
+        return Command(send_expr=f'AA Y' if y else f'AA X', read_expr=':A').execute(self)
+
+    def az(self, y: bool = False):
+        return Command(send_expr=f'AZ Y' if y else f'AZ X', read_expr=':A').execute(self)
+
 
 class Errors(object):
-
     PI_NO_ERROR = 0
     PI_DEVICE_NOT_FOUND = 1
     PI_OBJECT_NOT_FOUND = 2

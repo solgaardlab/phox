@@ -91,7 +91,7 @@ class SerialMixin(object):
             self._is_verified = True
         else:
             self._is_verified = False
-            logger.warning('Failed verification. Device might be off.')
+            logger.error('Failed verification. Device might be off.')
 
     def close(self):
         self._ser.close()
