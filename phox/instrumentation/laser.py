@@ -1,7 +1,3 @@
-"""
-HEWLETT-PACKARD, 8164A (Tunable Laser Source)
-We use GPIB-USB Interface to communicate
-"""
 import time
 from typing import Union
 
@@ -10,6 +6,12 @@ from .serial import SerialMixin
 
 class LaserHP8164A(SerialMixin):
     def __init__(self, port: str = '/dev/ttyUSB2', source_idx: int = 0):
+        """
+
+        Args:
+            port:
+            source_idx:
+        """
         self.source_idx = source_idx
         SerialMixin.__init__(self,
                              port=port,

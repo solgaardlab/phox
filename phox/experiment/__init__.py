@@ -1,1 +1,1 @@
-from .mzicamera import MZICamera
+from .activephotonicsimager import ActivePhotonicsImager

@@ -8,6 +8,7 @@ from numpy.ctypeslib import ndpointer
 from threading import Thread, Lock
 import logging
 logger = logging.getLogger()
+import time
 
 from typing import Optional
 
@@ -124,7 +125,7 @@ set_property_value_f.restype = ctypes.c_ulong  # ErrCode
 
 
 class XCamera:
-    def __init__(self, name: str = 'cam://0'):
+    def __init__(self, name: str = 'cam://0', integration_time: int = 5000):
         self.handle = open_camera(name.encode('UTF-8'), 0, 0)
         self.shape = (get_frame_height(self.handle), get_frame_width(self.handle))
         self._current_frame = None
@@ -134,6 +135,8 @@ class XCamera:
         self.started = False
         self.frame_lock = Lock()
         self.background_reference = None
+        self.set_integration_time(integration_time)
+        self.integration_time = integration_time * 1e-6
 
     def start(self) -> int:
         self.started = True
@@ -164,8 +167,9 @@ class XCamera:
         self.started_frame_loop = False
         self.thread.join()
 
-    def frame(self) -> np.ndarray:
+    def frame(self, wait_time: float = 0) -> np.ndarray:
         if self.started_frame_loop:
+            time.sleep(wait_time)
             with self.frame_lock:
                 frame = self._current_frame.copy()
             return frame

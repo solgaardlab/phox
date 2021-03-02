@@ -44,7 +44,7 @@ class ASI(SerialMixin, Stage):
     Object responsible for managing ASI Imaging stage.
     """
 
-    def __init__(self, port='/dev/ttyUSB2', x_limits=(-10, 10), y_limits=(-10, 30)):
+    def __init__(self, port='/dev/ttyUSB2', x_limits=(-10, 10), y_limits=(-20, 20)):
         SerialMixin.__init__(self, port)
         self.stage_config = {
             'X Limits': x_limits,
