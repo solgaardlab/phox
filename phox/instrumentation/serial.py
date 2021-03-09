@@ -220,15 +220,10 @@ class SerialMixin(object):
         return True
 
     def connect(self):
-        """
-        Set and attempt establishing a connection to port.
-        :param port: string; communications port (e.g. 'COM1')
-        :return: None
-        """
-
         if not self.is_online():
             self.open()
-        self.verify()
+        else:
+            self.verify()
         if self.is_verified():
             self.setup()
         return self

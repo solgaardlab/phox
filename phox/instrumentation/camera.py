@@ -4,6 +4,9 @@ import ctypes
 from collections import Callable
 
 import numpy as np
+import holoviews as hv
+from holoviews import opts
+from holoviews.streams import Pipe
 from numpy.ctypeslib import ndpointer
 from threading import Thread, Lock
 import logging
@@ -137,6 +140,7 @@ class XCamera:
         self.background_reference = None
         self.set_integration_time(integration_time)
         self.integration_time = integration_time * 1e-6
+        self.livestream_pipe = Pipe(data=[])
 
     def start(self) -> int:
         self.started = True
@@ -199,3 +203,27 @@ class XCamera:
         if self.started_frame_loop:
             self.stop_frame_loop()
         self.stop()
+
+    def livestream_panel(self, cmap='hot'):
+        """
+
+        Args:
+            cmap: colormap for the livestream
+
+        Returns:
+            A video livestream for the camera
+
+        """
+        dmap = hv.DynamicMap(hv.Image, streams=[self.livestream_pipe]).opts(
+            width=640, height=512, show_grid=True, colorbar=True, xaxis=None, yaxis=None, cmap=cmap)
+
+        def update_plot(img):
+            time.sleep(0.1)
+            self.livestream_pipe.send(img.astype(np.float))
+
+        scalebar = hv.Text(0.4, 0.4, '50 um').opts(
+            text_align='center', text_baseline='middle',
+            text_color='green', text_font='Arial') * hv.Path([(0.35, 0.45), (0.45, 0.45)]).opts(color='green',
+                                                                                                line_width=4)
+        self.start_frame_loop(update_plot)
+        return dmap.opts(opts.Image(axiswise=True, xlim=(-0.5, 0.5), ylim=(-0.5, 0.5))) * scalebar

@@ -1,11 +1,14 @@
 __author__ = 'Joe Landry'
 
+from typing import Tuple
+
 from .serial import SerialMixin
 import logging as logger
 import abc
 import numpy as np
 import os
 import ctypes
+import panel as pn
 
 ERROR_CODES = {
     -1: 'Unknown Command',
@@ -199,6 +202,49 @@ class ASI(SerialMixin, Stage):
 
     def az(self, y: bool = False):
         return Command(send_expr=f'AZ Y' if y else f'AZ X', read_expr=':A').execute(self)
+
+    def move_panel(self, xlim: Tuple[float, float] = (-1, 1), ylim: Tuple[float, float] = (-6.18, 0),
+                   dx: float = 0.001, dy: float = 0.001) -> pn.Pane:
+        """
+
+        Args:
+            xlim: limits to the :math:`x`-position in mm
+            ylim: limits to the :math:`y`-position in mm
+            dx: increments for the :math:`x`-slider
+            dy: increments for the :math:`y`-slider
+
+        Returns:
+            Move panel consisting of :math:`x`-slider and :math:`y`-slider and a Sync stage position button.
+
+        """
+        init_x, init_y = self.where()
+
+        x = pn.widgets.FloatSlider(start=xlim[0], end=xlim[1], step=dx,
+                                   value=init_x, name='X Position', format='1[.]000')
+        y = pn.widgets.FloatSlider(start=ylim[0], end=ylim[1], step=dy,
+                                   value=init_y, name='Y Position', format='1[.]000')
+        sync = pn.widgets.Button(name='Sync Stage Position')
+
+        def move_x(*events):
+            for event in events:
+                if event.name == 'value':
+                    self.move(x=event.new)
+
+        def move_y(*events):
+            for event in events:
+                if event.name == 'value':
+                    self.move(y=event.new)
+
+        def sync_(*events):
+            new_x, new_y = self.where()
+            x.value = new_x
+            y.value = new_y
+
+        x.param.watch(move_x, 'value')
+        y.param.watch(move_y, 'value')
+        sync.on_click(sync_)
+
+        return pn.Column(x, y, sync)
 
 
 class Errors(object):

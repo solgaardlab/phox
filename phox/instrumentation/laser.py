@@ -1,16 +1,17 @@
 import time
-from typing import Union
+from typing import Union, Tuple
+import panel as pn
 
 from .serial import SerialMixin
 
 
 class LaserHP8164A(SerialMixin):
     def __init__(self, port: str = '/dev/ttyUSB2', source_idx: int = 0):
-        """
+        """Agilent Laser Module with Holoviz GUI interface
 
         Args:
-            port:
-            source_idx:
+            port: serial port string
+            source_idx: source index on the machine (slot in which the laser is located)
         """
         self.source_idx = source_idx
         SerialMixin.__init__(self,
@@ -119,3 +120,56 @@ class LaserHP8164A(SerialMixin):
         self.write('wav:swe 1')
         time.sleep(timeout)
         self.write('wav:swe 0')
+
+    def wavelength_panel(self, wavelength_range: Tuple[float, float] = (1.530, 1.584), dlam: float = 0.001):
+        """
+        Panel for dispersion handling
+
+        Args:
+            wavelength_range: wavelength range
+            dlam: lambda step size for adjustment
+
+        Returns:
+
+        """
+        dispersion = pn.widgets.FloatSlider(start=wavelength_range[0], end=wavelength_range[1], step=dlam,
+                                            value=self.wavelength, name=r'Wavelength (um)',
+                                            format='1[.]000')
+
+        def change_wavelength(*events):
+            for event in events:
+                if event.name == 'value':
+                    self.wavelength = event.new
+
+        dispersion.param.watch(change_wavelength, 'value')
+
+        return dispersion
+
+    def power_panel(self, power_range: Tuple[float, float] = (0.05, 4.25), interval=0.001):
+        """
+
+        Args:
+            power_range: Range of powers
+            interval: Interval between the powers that can be specified
+
+        Returns:
+            Panel for jupyter notebook for controlling the laser
+
+        """
+        power = pn.widgets.FloatSlider(start=power_range[0], end=power_range[1], step=interval,
+                                       value=self.power, name='Power (mW)', format='1[.]000')
+        state = pn.widgets.Toggle(name='Laser Enable', value=bool(self.state))
+
+        def change_power(*events):
+            for event in events:
+                if event.name == 'value':
+                    self.power = event.new
+
+        def change_state(*events):
+            for event in events:
+                if event.name == 'value':
+                    self.state = int(event.new)
+
+        state.param.watch(change_state, 'value')
+        power.param.watch(change_power, 'value')
+        return pn.Column(power, state)
