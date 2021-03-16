@@ -13,7 +13,7 @@ import logging
 logger = logging.getLogger()
 import time
 
-from typing import Optional
+from typing import Optional, List, Tuple
 
 lusb = ctypes.CDLL('/usr/local/lib/libusb-1.0.so', mode=ctypes.RTLD_GLOBAL)
 xen = ctypes.CDLL('libxeneth.so')
@@ -128,7 +128,15 @@ set_property_value_f.restype = ctypes.c_ulong  # ErrCode
 
 
 class XCamera:
-    def __init__(self, name: str = 'cam://0', integration_time: int = 5000):
+    def __init__(self, name: str = 'cam://0', integration_time: int = 5000,
+                 spots: Optional[List[Tuple[int, int, int, int]]] = None):
+        """Xenics Camera (XCamera)
+
+        Args:
+            name: camera URL
+            integration_time: Default integration time for the camera
+            spots: list of spots to track during frame loop
+        """
         self.handle = open_camera(name.encode('UTF-8'), 0, 0)
         self.shape = (get_frame_height(self.handle), get_frame_width(self.handle))
         self._current_frame = None
@@ -141,6 +149,8 @@ class XCamera:
         self.set_integration_time(integration_time)
         self.integration_time = integration_time * 1e-6
         self.livestream_pipe = Pipe(data=[])
+        self.spots = [] if spots is None else spots
+        self.spot_powers = []
 
     def start(self) -> int:
         self.started = True
@@ -217,9 +227,16 @@ class XCamera:
         dmap = hv.DynamicMap(hv.Image, streams=[self.livestream_pipe]).opts(
             width=640, height=512, show_grid=True, colorbar=True, xaxis=None, yaxis=None, cmap=cmap)
 
-        def update_plot(img):
-            time.sleep(0.1)
-            self.livestream_pipe.send(img.astype(np.float))
+        if len(self.spots) > 0:
+            def update_plot(img):
+                time.sleep(0.1)
+                self.livestream_pipe.send(img.astype(np.float))
+                self.spot_powers = np.asarray([_get_grating_spot(img, (s[0], s[1]), (s[2], s[3]))[0]
+                                               for s in self.spots])
+        else:
+            def update_plot(img):
+                time.sleep(0.1)
+                self.livestream_pipe.send(img.astype(np.float))
 
         scalebar = hv.Text(0.4, 0.4, '50 um').opts(
             text_align='center', text_baseline='middle',
@@ -227,3 +244,10 @@ class XCamera:
                                                                                                 line_width=4)
         self.start_frame_loop(update_plot)
         return dmap.opts(opts.Image(axiswise=True, xlim=(-0.5, 0.5), ylim=(-0.5, 0.5))) * scalebar
+
+
+def _get_grating_spot(img: np.ndarray, center: Tuple[int, int], window_size: Tuple[int, int]) -> Tuple[np.ndarray, np.ndarray]:
+    window = img[center[0] - window_size[0]:center[0] + window_size[0],
+             center[1] - window_size[1]:center[1] + window_size[1]]
+    power = np.sum(window)
+    return power, window

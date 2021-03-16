@@ -6,7 +6,7 @@ from .serial import SerialMixin
 
 
 class LaserHP8164A(SerialMixin):
-    def __init__(self, port: str = '/dev/ttyUSB2', source_idx: int = 0):
+    def __init__(self, port: str = '/dev/ttyUSB2', source_idx: int = 0, gpib_addr: int = 9):
         """Agilent Laser Module with Holoviz GUI interface
 
         Args:
@@ -14,6 +14,7 @@ class LaserHP8164A(SerialMixin):
             source_idx: source index on the machine (slot in which the laser is located)
         """
         self.source_idx = source_idx
+        self.gpib_addr = gpib_addr
         SerialMixin.__init__(self,
                              port=port,
                              id_command='*IDN?',
@@ -29,7 +30,7 @@ class LaserHP8164A(SerialMixin):
 
     def setup(self):
         self.write('++auto 1')
-        self.write('++addr 9')
+        self.write(f'++addr {self.gpib_addr}')
 
     @property
     def on(self) -> bool:

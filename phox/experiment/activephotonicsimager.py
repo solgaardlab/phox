@@ -1,4 +1,4 @@
-from ..instrumentation import ASI, MeshAOControl, XCamera, LaserHP8164A
+from ..instrumentation import ASI, MeshAOControl, XCamera, LaserHP8164A, LightwaveMultimeterHP8163A
 from ..utils import minmax_scale
 from typing import Tuple, Callable, Optional, List
 import numpy as np
@@ -9,12 +9,12 @@ from shapely.geometry import Polygon
 
 import logging
 logger = logging.getLogger()
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.INFO)
 
 
 class ActivePhotonicsImager:
     def __init__(self, home: Tuple[float, float] = (0, 0),
-                 stage_port: str = '/dev/ttyUSB1', laser_port: str = '/dev/ttyUSB0',
+                 stage_port: str = '/dev/ttyUSB0', laser_port: str = '/dev/ttyUSB1', lmm_port: str = '/dev/ttyUSB2',
                  camera_calibration_filepath: Optional[str] = None, integration_time: int = 20000,
                  plim: Tuple[float, float] = (0.05, 4.25), vmax: float = 6):
         """Active photonics imager, incorporating stage, camera livestream, and voltage control.
@@ -23,6 +23,7 @@ class ActivePhotonicsImager:
             home: Home position for the stage
             stage_port: Stage serial port str
             laser_port: Laser serial port str
+            lmm_port: Laser multimeter serial port str
             camera_calibration_filepath: Camera calibration file (for Xenics bobcat camera)
             integration_time: Integration time for the camera
             plim: Allowed laser power limits (min, max)
@@ -30,8 +31,9 @@ class ActivePhotonicsImager:
         """
         self.home = home
         logger.info('Connecting to camera...')
-        self.camera = XCamera(integration_time=integration_time)
-        self.integration_time = integration_time
+        if 'camera' not in self.__dict__:
+            self.camera = XCamera(integration_time=integration_time)
+            self.integration_time = integration_time
         self.camera.start()
         if camera_calibration_filepath is not None:
             self.camera.load_calibration(camera_calibration_filepath)
@@ -43,6 +45,9 @@ class ActivePhotonicsImager:
         logger.info('Connecting to laser...')
         self.laser = LaserHP8164A(port=laser_port)
         self.laser.connect()
+        logger.info('Connecting to lightwave multimeter')
+        self.lmm = LightwaveMultimeterHP8163A(port=lmm_port)
+        self.lmm.connect()
         logger.info('Turning laser off...')
         self.laser.state = 0
         time.sleep(1)

@@ -1,6 +1,7 @@
 __author__ = 'Joe Landry'
 
 import serial
+from serial import rs485
 import logging
 import time
 import re
@@ -68,6 +69,9 @@ class SerialMixin(object):
         self._maxBuffer = 4096  # Default device output buffer size
         self._isOnline = False  # True when device is verified by instrument returning ID response.
         self._ser.write_timeout = .5  # [s] Write timeout. Necessary for some instruments (depending on handshaking?)
+
+    def enable_rs485(self):
+        self._ser.rs485_mode = rs485.RS485Settings(True, True)
 
     def open(self):
         """

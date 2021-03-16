@@ -1,27 +1,35 @@
 from typing import Tuple, Callable, Optional, Dict
 
 from .activephotonicsimager import ActivePhotonicsImager, _get_grating_spot
+from ..instrumentation import XCamera
 
 import time
 import numpy as np
 
 import logging
+
+
 logger = logging.getLogger()
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.INFO)
 
 
 class TriangularMeshImager(ActivePhotonicsImager):
     def __init__(self, interlayer_xy: Tuple[float, float], spot_xy: Tuple[int, int], interspot_xy: Tuple[int, int],
-                 ps_assignments: Dict[Tuple[int, int], int], home: Tuple[float, float] = (0, 0),
-                 stage_port: str = '/dev/ttyUSB1', laser_port: str = '/dev/ttyUSB0',
+                 ps_assignments: Dict[Tuple[int, int], int], window_shape: Tuple[int, int] = (15, 10),
+                 home: Tuple[float, float] = (0, 0), stage_port: str = '/dev/ttyUSB1',
+                 laser_port: str = '/dev/ttyUSB0', lmm_port: str = '/dev/ttyUSB2',
                  camera_calibration_filepath: Optional[str] = None, integration_time: int = 20000,
                  plim: Tuple[float, float] = (0.05, 4.25), vmax: float = 6):
         self.interlayer_xy = interlayer_xy
-        self.spot_xy = spot_xy
-        self.interspot_xy = interspot_xy
+        self.spot_xy = s = spot_xy
+        self.interspot_xy = ixy = interspot_xy
         self.ps_assignments = ps_assignments
         self.calibrations = {}
-        super(TriangularMeshImager, self).__init__(home, stage_port, laser_port, camera_calibration_filepath,
+        self.spots = [(j * ixy[0] + s[0], i * ixy[1] + s[1], window_shape[0], window_shape[1])
+                      for j in range(6) for i in range(3)]
+        self.camera = XCamera(integration_time=integration_time, spots=self.spots)
+        self.integration_time = integration_time
+        super(TriangularMeshImager, self).__init__(home, stage_port, laser_port, lmm_port, camera_calibration_filepath,
                                                    integration_time, plim, vmax)
 
     def to_layer(self, layer: int):
@@ -54,37 +62,62 @@ class TriangularMeshImager(ActivePhotonicsImager):
                                                           window_size=window_size)[1] for j in range(n)]))
         return np.hstack(spots[::-1])
 
-    def mesh_sweep(self, ps_location: Tuple[int, int], layer: int, idx: int, vmax: float,
-                   window_size: int = 15, wait_time: float = 0.2, resolution: int = 100,
+    def mesh_sweep(self, ps_location: Tuple[int, int], layer: int, vlim: Tuple[float, float],
+                   wait_time: float = 0.1, n_samples: int = 1001,
                    pbar: Optional[Callable] = None) -> Tuple[np.ndarray, np.ndarray]:
-        self.to_layer(layer)
-        vs = np.sqrt(np.linspace(0, vmax ** 2, resolution))
-        centers = [(self.spot_xy[0] + self.interspot_xy[0] * idx, self.spot_xy[1]),
-                   (self.spot_xy[0] + self.interspot_xy[0] * (idx + 1), self.spot_xy[1])]
-        powers, _ = self.sweep_voltage(voltages=vs, centers=centers,
-                                       channel=self.ps_assignments[ps_location],
-                                       pbar=pbar, window_size=window_size, wait_time=wait_time)
-        split_ratios = powers[1] / (powers[0] + powers[1])
-        return vs, split_ratios
-    #
-    # def calibrate(self, ps_location: Tuple[int, int], layer: int, idx: int, vmax: float,
-    #               window_size: int = 20, wait_time: float = 0.1, resolution: int = 100,
-    #               pbar: Optional[Callable] = None):
-    #     self.calibrations[ps_location] = self.mesh_sweep(ps_location, layer, idx, vmax,
-    #                                                      win)
+        """
 
-    def nullify(self, theta: Tuple[int, int], phi: Tuple[int, int], vmax: float = 5, resolution: int = 100,
-                window_size: int = 15, pbar: Optional[Callable] = None):
-        layer, idx = theta
-        vs, phi_split_ratios = self.mesh_sweep(phi, layer - 1, idx, vmax, window_size=window_size,
-                                               resolution=resolution, pbar=pbar)
-        logger.info('Minimize using phi')
-        opt_phi = vs[np.argmin(phi_split_ratios)]
-        self.control.write_chan(self.ps_assignments[phi], opt_phi)
+        Args:
+            ps_location: phase shifter location in the mesh
+            layer: layer to move the stage
+            vlim: Voltage limit for the sweep
+            wait_time: Wait time between setting the temperature and taking the image
+            n_samples: Number of samples
+            pbar: progress bar (optional) to track the progress of the sweep
+
+        Returns:
+
+        """
+        self.to_layer(layer)
         time.sleep(1)
-        logger.info('Minimize using theta')
-        vs, theta_split_ratios = self.mesh_sweep(theta, layer - 1, idx, vmax,  window_size=window_size,
-                                                 resolution=resolution, pbar=pbar)
-        opt_theta = vs[np.argmin(theta_split_ratios)]
-        self.control.write_chan(self.ps_assignments[theta], opt_theta)
+        vs = np.sqrt(np.linspace(vlim[0] ** 2, vlim[1] ** 2, n_samples))
+        iterator = pbar(vs) if pbar is not None else vs
+        channel = self.ps_assignments[ps_location]
+        powers = []
+        for v in iterator:
+            self.control.write_chan(channel, v)
+            time.sleep(wait_time)
+            powers.append(self.camera.spot_powers)
+        return vs, np.asarray(powers).T
+
+    def nullify(self, theta: Tuple[int, int], phi: Optional[Tuple[int, int]] = None,
+                vlim: Tuple[float, float] = (0, 5), n_samples: int = 1001, wait_time: float = 0.01,
+                pbar: Optional[Callable] = None, nullify_bottom: bool = True):
+        layer, idx = theta
+        idx_null, idx_max = (idx * 3, (idx + 1) * 3) if nullify_bottom else ((idx + 1) * 3, idx * 3)
+
+        def nullify_ps(ps, name):
+            vs, powers = self.mesh_sweep(ps, layer - 1, vlim=vlim, wait_time=wait_time,
+                                         n_samples=n_samples, pbar=pbar)
+            logger.info(f'Minimize power by adjusting {name} phase shifter at {ps}')
+            split_ratios = powers[idx_null] / (powers[idx_max] + powers[idx_null])
+            opt_ps = vs[np.argmin(split_ratios)]
+            self.control.write_chan(self.ps_assignments[ps], opt_ps)
+            return opt_ps
+
+        if phi is not None:
+            opt_phi = nullify_ps(phi, 'phi')
+        else:
+            opt_phi = None
+        # time for temperature to settle
+        time.sleep(1)
+        opt_theta = nullify_ps(theta, 'phi')
         return opt_theta, opt_phi
+
+    def nidaqmx_spot_callback(self):
+        p = []
+
+        def spot_update(task_idx, every_n_samples_event_type, num_of_samples, callback_data):
+            p.append(self.camera.spot_powers)
+            return 0
+        return p, spot_update
