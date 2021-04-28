@@ -5,13 +5,17 @@ from collections import Callable
 
 import numpy as np
 import holoviews as hv
-from holoviews import opts
 from holoviews.streams import Pipe
 from numpy.ctypeslib import ndpointer
 from threading import Thread, Lock
 import logging
+
+from tornado.ioloop import PeriodicCallback
+
 logger = logging.getLogger()
 import time
+import panel as pn
+from tornado import gen
 
 from typing import Optional, List, Tuple
 
@@ -151,6 +155,7 @@ class XCamera:
         self.livestream_pipe = Pipe(data=[])
         self.spots = [] if spots is None else spots
         self.spot_powers = []
+        self.livestream_on = False
 
     def start(self) -> int:
         self.started = True
@@ -172,10 +177,24 @@ class XCamera:
     def _frame_loop(self, on_frame: Optional[Callable] = None):
         while self.started_frame_loop:
             frame = self._frame()
+            if self.spots is not None:
+                self.spot_powers = np.asarray([_get_grating_spot(frame, (s[0], s[1]), (s[2], s[3]))[0]
+                                               for s in self.spots])
             if on_frame is not None:
                 on_frame(frame)
             with self.frame_lock:
-                self._current_frame = frame
+                self._current_frame = frame.copy()
+
+    def _livestream_loop(self, on_frame: Optional[Callable] = None):
+        while self.started_frame_loop:
+            frame = self._frame()
+            if self.spots is not None:
+                self.spot_powers = np.asarray([_get_grating_spot(frame, (s[0], s[1]), (s[2], s[3]))[0]
+                                               for s in self.spots])
+            if on_frame is not None:
+                on_frame(frame)
+            with self.frame_lock:
+                self._current_frame = frame.copy()
 
     def stop_frame_loop(self):
         self.started_frame_loop = False
@@ -224,26 +243,31 @@ class XCamera:
             A video livestream for the camera
 
         """
-        dmap = hv.DynamicMap(hv.Image, streams=[self.livestream_pipe]).opts(
-            width=640, height=512, show_grid=True, colorbar=True, xaxis=None, yaxis=None, cmap=cmap)
+        bounded_img = lambda data: hv.Image(data, bounds=(0, 0, 640, 512))
+        dmap = hv.DynamicMap(bounded_img, streams=[self.livestream_pipe]).opts(
+            width=640, height=512, show_grid=True, colorbar=True, cmap=cmap,
+            shared_axes=False).redim.range(z=(0, 2 ** 15))
+        livestream_toggle = pn.widgets.Toggle(name='Livestream', value=False)
+        self.livestream_pipe.send(np.fliplr(self.frame().astype(np.float)))
 
-        if len(self.spots) > 0:
-            def update_plot(img):
-                time.sleep(0.1)
-                self.livestream_pipe.send(img.astype(np.float))
-                self.spot_powers = np.asarray([_get_grating_spot(img, (s[0], s[1]), (s[2], s[3]))[0]
-                                               for s in self.spots])
-        else:
-            def update_plot(img):
-                time.sleep(0.1)
-                self.livestream_pipe.send(img.astype(np.float))
+        @gen.coroutine
+        def update_plot():
+            self.livestream_pipe.send(np.fliplr(self.frame().astype(np.float)))
 
-        scalebar = hv.Text(0.4, 0.4, '50 um').opts(
-            text_align='center', text_baseline='middle',
-            text_color='green', text_font='Arial') * hv.Path([(0.35, 0.45), (0.45, 0.45)]).opts(color='green',
-                                                                                                line_width=4)
-        self.start_frame_loop(update_plot)
-        return dmap.opts(opts.Image(axiswise=True, xlim=(-0.5, 0.5), ylim=(-0.5, 0.5))) * scalebar
+        cb = PeriodicCallback(update_plot, 100)
+
+        def change_livestream(*events):
+            for event in events:
+                if event.name == 'value':
+                    self.livestream_on = bool(event.new)
+                    if self.livestream_on:
+                        cb.start()
+                    else:
+                        cb.stop()
+
+        livestream_toggle.param.watch(change_livestream, 'value')
+
+        return pn.Column(dmap, livestream_toggle)
 
 
 def _get_grating_spot(img: np.ndarray, center: Tuple[int, int], window_size: Tuple[int, int]) -> Tuple[np.ndarray, np.ndarray]:

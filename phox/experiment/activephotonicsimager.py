@@ -1,5 +1,4 @@
-from ..instrumentation import ASI, MeshAOControl, XCamera, LaserHP8164A, LightwaveMultimeterHP8163A
-from ..utils import minmax_scale
+from ..instrumentation import ASI, NIDAQControl, XCamera, LaserHP8164A, LightwaveMultimeterHP8163A
 from typing import Tuple, Callable, Optional, List
 import numpy as np
 import time
@@ -41,7 +40,7 @@ class ActivePhotonicsImager:
         self.stage = ASI(port=stage_port)
         self.stage.connect()
         logger.info('Connecting to mesh voltage control...')
-        self.control = MeshAOControl(vmax)
+        self.control = NIDAQControl(vmax)
         logger.info('Connecting to laser...')
         self.laser = LaserHP8164A(port=laser_port)
         self.laser.connect()

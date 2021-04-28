@@ -6,8 +6,7 @@ from .serial import SerialMixin
 import logging as logger
 import abc
 import numpy as np
-import os
-import ctypes
+import time
 import panel as pn
 
 ERROR_CODES = {
@@ -118,6 +117,12 @@ class ASI(SerialMixin, Stage):
     def is_moving(self):
         return Command(send_expr='/', read_expr=r'(\w)\r\n', group=1).execute(self) == 'B'
 
+    def wait_until_stopped(self, interval: float = 0.1):
+        while True:
+            time.sleep(interval)
+            if not self.is_moving():
+                break
+
     def set_home(self):
         raise NotImplementedError('Needs to be defined')
 
@@ -203,7 +208,7 @@ class ASI(SerialMixin, Stage):
     def az(self, y: bool = False):
         return Command(send_expr=f'AZ Y' if y else f'AZ X', read_expr=':A').execute(self)
 
-    def move_panel(self, xlim: Tuple[float, float] = (-1, 1), ylim: Tuple[float, float] = (-6.18, 0),
+    def move_panel(self, xlim: Tuple[float, float] = (-1, 1), ylim: Tuple[float, float] = (-6.18, 0.2),
                    dx: float = 0.001, dy: float = 0.001) -> pn.Pane:
         """
 
