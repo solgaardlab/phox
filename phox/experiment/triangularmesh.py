@@ -1,6 +1,7 @@
 from typing import Tuple, Callable, Optional, Dict, List
 
 from holoviews.streams import Pipe
+from neurophox.decompositions import reck_decomposition
 
 from .activephotonicsimager import ActivePhotonicsImager, _get_grating_spot
 from ..instrumentation import XCamera
@@ -14,6 +15,7 @@ import panel as pn
 
 import logging
 import holoviews as hv
+import hashlib
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -42,6 +44,8 @@ class TriangularMeshImager(ActivePhotonicsImager):
         self.phi_ps = config['phis']
         self.phi_cal_cfg = config['phi_calibrations']
         self.theta_cal_cfg = config['theta_calibrations']
+        self.theta_p = config['theta_p']
+        self.phi_p = config['phi_p']
         self.backward = False
         self.backward_shift = backward_shift
         super(TriangularMeshImager, self).__init__(home, stage_port, laser_port, lmm_port, camera_calibration_filepath,
@@ -137,7 +141,7 @@ class TriangularMeshImager(ActivePhotonicsImager):
         idx_null, idx_max = (idx * 3, (idx + 1) * 3) if bottom else ((idx + 1) * 3, idx * 3)
 
         vlim = {
-            # 'theta': (self.p2v(theta, 0), self.p2v(theta, 2 * np.pi)) if vlim_theta is None else vlim_theta,
+            'theta': (self.p2v(theta, 0), self.p2v(theta, 2 * np.pi)) if vlim_theta is None else vlim_theta,
             'phi': (self.p2v(phi, 0), self.p2v(phi, 2 * np.pi)) if vlim_phi is None else vlim_phi
         }
 
@@ -190,11 +194,37 @@ class TriangularMeshImager(ActivePhotonicsImager):
         def transparent_cross(*events):
             self.set_transparent(bar=False)
 
+        def alternating(*events):
+            self.set_input(np.asarray((1, 0, 1, 0, 1)))
+
+        def uniform(*events):
+            self.set_input(np.asarray((1, 1, 1, 1, 1)))
+
+        def basis(i: int):
+            def f(*events):
+                self.set_input(np.asarray(np.eye(self.n + 1)[i]))
+            return f
+
         bar_button = pn.widgets.Button(name='Transparent (Bar)')
         bar_button.on_click(transparent_bar)
         cross_button = pn.widgets.Button(name='Transparent (Cross)')
         cross_button.on_click(transparent_cross)
-        return pn.Column(bar_button, cross_button)
+        alternating_button = pn.widgets.Button(name='Alternate In (1-0-1-0-1)')
+        alternating_button.on_click(alternating)
+        uniform_button = pn.widgets.Button(name='Uniform In (1-1-1-1-1)')
+        uniform_button.on_click(uniform)
+        button_list = [pn.widgets.Button(name=f'{i}', width=15) for i in range(5)]
+        for i, button in enumerate(button_list):
+            button.on_click(basis(i))
+        buttons = pn.Row(*button_list)
+        return pn.Column(bar_button, cross_button, alternating_button, uniform_button, buttons)
+
+    def set_unitary(self, u):
+        _, thetas, phis = reck_decomposition(u)
+        for theta_ps, theta in zip(self.ps_to_mesh['theta_mesh'], thetas[::-1]):
+            self.set_phase(theta_ps, theta)
+        for phi_ps, phi in zip(self.ps_to_mesh['phi_mesh'], phis[::-1]):
+            self.set_phase(phi_ps, phi)
 
     def nidaqmx_spot_callback(self):
         p = []
@@ -222,13 +252,16 @@ class TriangularMeshImager(ActivePhotonicsImager):
         self.mesh_pipe.send(np.full(len(polys), np.nan))
         image_button = pn.widgets.Button(name='Mesh Image')
         def mesh_image(*events):
-            powers, spots = self.mesh_img(self.n + 2)
-            powers[powers <= 0] = 0
-            powers = np.flipud(np.sqrt(powers / np.max(powers)))
-            self.mesh_pipe.send([p for p, multipoly in zip(powers.flatten(), mesh.path_array.flatten())
-                                 for _ in multipoly])
+            self.update_mesh_image()
         image_button.on_click(mesh_image)
         return pn.Column(waveguides * powers_mesh, image_button)
+
+    def update_mesh_image(self):
+        powers, spots = self.mesh_img(self.n + 2)
+        powers[powers <= 0] = 0
+        powers = np.flipud(np.sqrt(powers / np.max(powers)))
+        self.mesh_pipe.send([p for p, multipoly in zip(powers.flatten(), mesh.path_array.flatten())
+                             for _ in multipoly])
 
     def calibrate(self, ps: Tuple[int, int], spot: Tuple[int, int] = None, lower: bool = False, vmax: float = 5.5,
                   n_samples: int = 10000, p0: Tuple[float, ...] = (1, 0, 0, 0.3, 0, 0),
@@ -358,7 +391,7 @@ class TriangularMeshImager(ActivePhotonicsImager):
                 ps = self.ps_to_mesh[key][i]
                 self.set_phase(ps, phase[var])
 
-    def read_output(self, forward: bool = True, pbar: Optional[Callable] = None):
+    def read_output(self, forward: bool = True, pbar: Optional[Callable] = None, update_mesh: bool = False):
         direction = 'right' if forward else 'true'
         theta_ps = self.ps_to_mesh[f'theta_{direction}'][::-1]
         phi_ps = self.ps_to_mesh[f'phi_{direction}'][::-1]
@@ -372,13 +405,74 @@ class TriangularMeshImager(ActivePhotonicsImager):
 
         # TODO(sunil): fix hardcoding
         for i in range(self.n):
-            v_theta, v_phi = self.nullify(theta=theta_ps[i], phi=phi_ps[i], move=False,
-                                          n_samples=351, wait_time=0.01, pbar=pbar, bottom=False)
+            v_theta, v_phi = self.nullify(theta=theta_ps[i], phi=phi_ps[i], move=False, spot=(16, 4 - i),
+                                          n_samples=501, wait_time=0.01, pbar=None, bottom=False)
             theta_vs.append(self.v2p(theta_ps[i], v_theta))
             phi_vs.append(self.v2p(phi_ps[i], v_phi))
+            if update_mesh:
+                self.update_mesh_image()
 
         thetas = np.asarray(theta_vs)  # change this based on calibration
         phis = np.asarray(phi_vs)  # change this based on calibration
 
         return phases_to_vector(thetas, phis, lower_theta, lower_phi)
 
+    def read_panel(self, update_mesh: bool = True):
+        read_button = pn.widgets.Button(name='Self-Configure (Read) Output')
+        def mesh_image(*events):
+            self.read_output(update_mesh=True)
+        read_button.on_click(mesh_image)
+        return read_button
+
+    def calibrate_panel(self, ps=(17, 1)):
+        vs = np.sqrt(np.linspace(0, 5.5 ** 2, 10000))
+        p = self.theta_p[ps] if ps in self.theta_p else self.phi_p[ps]
+        idx = (ps[1] - 1) * 3
+        return pn.Column(
+            hv.Overlay([
+                hv.Curve((vs ** 2, p[idx] / (p[idx + 3] + p[idx])), label='reflectivity'),
+                hv.Curve((vs ** 2, p[idx + 3] / (p[idx + 3] + p[idx])), label='transmissivity'),
+                hv.Curve((vs ** 2, p[idx] / p[idx + 2]), label='upper out'),
+                hv.Curve((vs ** 2, p[idx + 3] / p[idx + 2]), label='lower out'),
+                hv.Curve((vs ** 2, p[idx + 1] / (p[idx + 1] + p[idx + 4])), label='upper arm'),
+                hv.Curve((vs ** 2, p[idx + 4] / (p[idx + 1] + p[idx + 4])), label='lower arm'),
+                hv.Curve((vs ** 2, (p[idx + 1] + p[idx + 4]) / p[idx + 2]), label='total arm'),
+                hv.Curve((vs ** 2, (p[idx + 0] + p[idx + 3]) / p[idx + 2]), label='total out')
+            ]).opts(width=800, height=400, legend_position='right', shared_axes=False,
+                    title='MZI Inspection Curves'),
+            pn.Row(
+                hv.Overlay([hv.Curve((self.v2p(t, vs) / np.pi * 2, vs)) for t in {**self.phi_p, **self.theta_p} if
+                            t != (14, 0)]).opts(
+                    xlabel='Phase (θ)', ylabel='Voltage (V)').opts(shared_axes=False, title='Calibration Curves',
+                                                                   xformatter='%fπ'),
+                hv.Overlay([hv.Curve((vs, self.v2p(t, vs) / np.pi * 2)) for t in {**self.phi_p, **self.theta_p} if
+                            t != (14, 0)]).opts(
+                    ylabel='Phase (θ)', xlabel='Voltage (V)').opts(shared_axes=False, yformatter='%fπ')
+            )
+        )
+
+    def get_opow_hash(self, input_bits):
+        hasher1 = hashlib.sha3_256()
+        hasher1.update(input)
+        x = []
+        for k in range(64):
+            x.append(0)
+        for i in range(0, 64, 2):
+            j = i >> 1
+            x[i] = hasher1.digest()[j] >> 4
+            x[i + 1] = hasher1.digest()[j] & 0x0F
+        y = []
+        for i in range(len(x)):
+            y.append(0)
+            for j in range(len(x)):
+                y[i] += M[i][j] * x[j]
+            y[i] = y[i] >> 10
+        preout = bytearray()
+        for i in range(32):
+            a = y[i << 1]
+            b = y[(i << 1) + 1]
+            preout.append(((a << 4) | b) ^ hasher1.digest()[i])
+        hasher2 = hashlib.sha3_256()
+        hasher2.update(preout)
+        final_hash = hasher2.digest()
+        return final_hash

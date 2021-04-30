@@ -272,6 +272,6 @@ class XCamera:
 
 def _get_grating_spot(img: np.ndarray, center: Tuple[int, int], window_size: Tuple[int, int]) -> Tuple[np.ndarray, np.ndarray]:
     window = img[center[0] - window_size[0]:center[0] + window_size[0],
-             center[1] - window_size[1]:center[1] + window_size[1]]
+                 center[1] - window_size[1]:center[1] + window_size[1]]
     power = np.sum(window)
     return power, window

@@ -29,6 +29,8 @@ if __name__ == '__main__':
     propagation_toggle_panel = api.propagation_toggle_panel()
     transparent_panel = api.transparent_button_panel()
     mesh_panel = api.mesh_panel()
+    read_panel = api.read_panel()
+    calibrate_panel = api.calibrate_panel()
 
     pn.serve(pn.Column(
         pn.Row(pn.Column(livestream_panel),
@@ -36,7 +38,9 @@ if __name__ == '__main__':
                      wavelength_panel, led_panel,
                      propagation_toggle_panel, transparent_panel)
           ),
-        mesh_panel
+        mesh_panel,
+        read_panel,
+        calibrate_panel
     ), start=True, show=False, port=5006,
         websocket_origin="localhost:4444",
         ssl_certfile='/home/exx/ssl/jupyter_cert.pem',
