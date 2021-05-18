@@ -3,7 +3,7 @@ from typing import List, Optional
 from functools import partial
 
 from .helpers import *
-from neurophox.helpers import get_alpha_checkerboard, get_smn_checkerboard, get_default_coarse_grain_ranks
+from neurophox.helpers import get_alpha_checkerboard
 from matplotlib.patches import Polygon
 
 LABELLER_TO_LABEL_FUNC = {

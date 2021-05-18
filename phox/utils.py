@@ -1,7 +1,6 @@
 import numpy as np
 from .typing import Arraylike
 from neurophox.components import SMMZI
-from typing import Tuple, Union
 
 
 def minmax_scale(img: np.ndarray):
@@ -53,11 +52,3 @@ def phases_to_vector(thetas: Arraylike, phis: Arraylike, lower_theta: Arraylike,
                       lower_phi=lower_phi[i]).givens_rotation(n + 1, i)
     return v.conj()
 
-
-def cal_v_power(v, a, b, p0, p1, p2, p3):
-    # take the absolute value of a to ensure a is positive!
-    return np.abs(a) * np.sin((p0 * v ** 3 + p1 * v ** 2 + p2 * v + p3)) ** 2 + b
-
-
-def cal_phase_v(x, q0, q1, q2, q3):
-    return q0 * x ** 3 + q1 * x ** 2 + q2 * x + q3

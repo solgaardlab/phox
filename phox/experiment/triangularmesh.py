@@ -1,7 +1,7 @@
-from typing import Tuple, Callable, Optional, Dict, List
+from typing import Tuple, Callable, Optional, Dict
 
+from holoviews import opts
 from holoviews.streams import Pipe
-from neurophox.decompositions import reck_decomposition
 
 from .activephotonicsimager import ActivePhotonicsImager, _get_grating_spot
 from ..instrumentation import XCamera
@@ -9,13 +9,17 @@ from dphox.demo import mesh
 
 import time
 import numpy as np
-from scipy.optimize import curve_fit
-from ..utils import vector_to_phases, phases_to_vector, cal_v_power, cal_phase_v
+
+from ..model.meshsim import reck
+from ..utils import vector_to_phases, phases_to_vector
 import panel as pn
+import pickle
 
 import logging
 import holoviews as hv
 import hashlib
+
+from ..model.phase import PhaseCalibration
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -23,12 +27,40 @@ logger.setLevel(logging.INFO)
 
 class TriangularMeshImager(ActivePhotonicsImager):
     def __init__(self, interlayer_xy: Tuple[float, float], spot_xy: Tuple[int, int], interspot_xy: Tuple[int, int],
-                 config: Dict, n: int = 4, window_shape: Tuple[int, int] = (15, 10), backward_shift: float = 0.033,
-                 home: Tuple[float, float] = (0, 0), stage_port: str = '/dev/ttyUSB1',
+                 config: Dict, ps_calibration: Dict, window_shape: Tuple[int, int] = (15, 10),
+                 backward_shift: float = 0.033, home: Tuple[float, float] = (0, 0), stage_port: str = '/dev/ttyUSB1',
                  laser_port: str = '/dev/ttyUSB0', lmm_port: str = '/dev/ttyUSB2',
                  camera_calibration_filepath: Optional[str] = None, integration_time: int = 20000,
                  plim: Tuple[float, float] = (0.05, 4.25), vmax: float = 6):
-        self.n = n
+        """A class meant to specifically image 6 x 6 triangular mesh,
+        but with the hope for generalization in the future.
+
+        Args:
+            interlayer_xy:
+            spot_xy:
+            interspot_xy:
+            config: Configuration file for the circuit
+            window_shape:
+            backward_shift:
+            home:
+            stage_port:
+            laser_port:
+            lmm_port:
+            camera_calibration_filepath:
+            integration_time:
+            plim:
+            vmax:
+        """
+        self.network = config['network']
+        self.thetas = [PhaseShifter(**ps_dict, mesh=self,
+                                    calibration=PhaseCalibration(**ps_calibration[tuple(ps_dict['grid_loc'])])
+                                    ) for ps_dict in config['thetas']]
+        self.thetas: Dict[Tuple[int, int], PhaseShifter] = {ps.grid_loc: ps for ps in self.thetas}
+        self.phis = [PhaseShifter(**ps_dict, mesh=self,
+                                  calibration=PhaseCalibration(**ps_calibration[tuple(ps_dict['grid_loc'])])
+                                  ) for ps_dict in config['phis']]
+        self.phis: Dict[Tuple[int, int], PhaseShifter] = {ps.grid_loc: ps for ps in self.phis}
+        self.ps: Dict[Tuple[int, int], PhaseShifter] = {**self.thetas, **self.phis}
         self.interlayer_xy = interlayer_xy
         self.spot_xy = s = spot_xy
         self.interspot_xy = ixy = interspot_xy
@@ -37,15 +69,6 @@ class TriangularMeshImager(ActivePhotonicsImager):
                       for j in range(6) for i in range(3)]
         self.camera = XCamera(integration_time=integration_time, spots=self.spots)
         self.integration_time = integration_time
-        self.ps_to_channel = config['ps_to_channel']
-        self.ps_to_mesh = config['ps_to_mesh']
-        self.ps_calibrations = config['ps_calibrations']
-        self.theta_ps = config['thetas']
-        self.phi_ps = config['phis']
-        self.phi_cal_cfg = config['phi_calibrations']
-        self.theta_cal_cfg = config['theta_calibrations']
-        self.theta_p = config['theta_p']
-        self.phi_p = config['phi_p']
         self.backward = False
         self.backward_shift = backward_shift
         super(TriangularMeshImager, self).__init__(home, stage_port, laser_port, lmm_port, camera_calibration_filepath,
@@ -56,7 +79,8 @@ class TriangularMeshImager(ActivePhotonicsImager):
         self.camera.start_frame_loop()
         self.go_home()
         self.stage.wait_until_stopped()
-        self.mesh_pipe = Pipe()
+        self.power_pipe = Pipe()
+        self.ps_pipe = Pipe()
         time.sleep(0.1)
 
     def to_layer(self, layer: int):
@@ -83,11 +107,13 @@ class TriangularMeshImager(ActivePhotonicsImager):
             time.sleep(wait_time)
             img = self.camera.frame()
             if m < n:
-                powers.append(np.hstack([np.vstack([_get_grating_spot(img, center=(j * ixy[0] + s[0], i * ixy[1] + s[1]),
-                                                                      window_size=window_size)[0]
-                                                   for j in range(n)]) for i in range(3)]))
+                powers.append(
+                    np.hstack([np.vstack([_get_grating_spot(img, center=(j * ixy[0] + s[0], i * ixy[1] + s[1]),
+                                                            window_size=window_size)[0]
+                                          for j in range(n)]) for i in range(3)]))
                 spots.append(np.hstack([np.vstack([_get_grating_spot(img, center=(j * ixy[0] + s[0], i * ixy[1] + s[1]),
-                                                                     window_size=window_size)[1] / np.sum(powers[-1][:, i])
+                                                                     window_size=window_size)[1] / np.sum(
+                    powers[-1][:, i])
                                                    for j in range(n)]) for i in range(3)]))
             else:
                 powers.append(np.vstack([_get_grating_spot(img, center=(j * ixy[0] + s[0], s[1]),
@@ -97,18 +123,18 @@ class TriangularMeshImager(ActivePhotonicsImager):
                                         for j in range(n)]))
         return np.fliplr(np.hstack(powers[::-1])), np.fliplr(np.hstack(spots[::-1]))
 
-    def mesh_sweep(self, ps_location: Tuple[int, int], layer: int, vlim: Tuple[float, float],
-                   wait_time: float = 0, n_samples: int = 1001, move: bool = True,
-                   pbar: Optional[Callable] = None) -> Tuple[np.ndarray, np.ndarray]:
+    def sweep(self, channel: int, layer: int, vlim: Tuple[float, float],
+              wait_time: float = 0.0, n_samples: int = 1001, move: bool = True,
+              pbar: Optional[Callable] = None) -> Tuple[np.ndarray, np.ndarray]:
         """
 
         Args:
-            ps_location: phase shifter location in the mesh
+            channel: voltage channel to sweep
             layer: layer to move the stage
             vlim: Voltage limit for the sweep
             wait_time: Wait time between setting the temperature and taking the image
             n_samples: Number of samples
-            move: whether to move to the appropriate layer (mainly useful for output nullify function)
+            move: whether to move to the appropriate layer
             pbar: progress bar (optional) to track the progress of the sweep
 
         Returns:
@@ -118,7 +144,6 @@ class TriangularMeshImager(ActivePhotonicsImager):
             self.to_layer(layer)
         vs = np.sqrt(np.linspace(vlim[0] ** 2, vlim[1] ** 2, n_samples))
         iterator = pbar(vs) if pbar is not None else vs
-        channel = self.ps_to_channel[ps_location]
         powers = []
         for v in iterator:
             self.control.write_chan(channel, v)
@@ -126,52 +151,17 @@ class TriangularMeshImager(ActivePhotonicsImager):
             powers.append(self.camera.spot_powers)
         return vs, np.asarray(powers).T
 
-    def reset_control(self):
+    def reset_control(self, vmin: float = 2):
         for device in self.control.system.devices:
             device.reset_device()
-
-    def nullify(self, theta: Tuple[int, int] = None, phi: Optional[Tuple[int, int]] = None,
-                spot: Tuple[int, int] = None, move: bool = True,
-                vlim_theta: Tuple[float, float] = None, vlim_phi: Tuple[float, float] = None,
-                n_samples: int = 1001, wait_time: float = 0.01,
-                pbar: Optional[Callable] = None, lower_theta: bool = False, bottom: bool = True):
-        layer, idx = spot
-        if not lower_theta:
-            idx -= 1  # ensures if theta PS is the top of the MZI
-        idx_null, idx_max = (idx * 3, (idx + 1) * 3) if bottom else ((idx + 1) * 3, idx * 3)
-
-        vlim = {
-            'theta': (self.p2v(theta, 0), self.p2v(theta, 2 * np.pi)) if vlim_theta is None else vlim_theta,
-            'phi': (self.p2v(phi, 0), self.p2v(phi, 2 * np.pi)) if vlim_phi is None else vlim_phi
-        }
-
-        def nullify_ps(ps, name):
-            vs, powers = self.mesh_sweep(ps, layer - 1, vlim=vlim[name], wait_time=wait_time,
-                                         n_samples=n_samples, pbar=pbar, move=move)
-            logger.info(f'Minimize power by adjusting {name} phase shifter at {ps}')
-            split_ratios = powers[idx_null] / (powers[idx_max] + powers[idx_null])
-            opt_ps = vs[np.argmin(split_ratios)]
-            self.control.write_chan(self.ps_to_channel[ps], opt_ps)
-            return opt_ps
-
-        if phi is not None:
-            opt_phi = nullify_ps(phi, 'phi')
-            time.sleep(0.5)
-        else:
-            opt_phi = None
-
-        if theta is not None:
-            # time for temperature to settle
-            opt_theta = nullify_ps(theta, 'theta')
-            time.sleep(0.5)
-        else:
-            opt_theta = None
-        return opt_theta, opt_phi
+        for ps in self.ps:
+            self.control.write_chan(self.ps[ps].voltage_channel, vmin)
 
     def propagation_toggle_panel(self, chan: int = 64):
         def toggle(*events):
             self.backward = not self.backward
             self.control.ttl_toggle(chan)
+
         button = pn.widgets.Button(name='Switch Propagation Direction')
         button.on_click(toggle)
         return button
@@ -184,15 +174,19 @@ class TriangularMeshImager(ActivePhotonicsImager):
 
         def go_home(*events):
             self.go_home()
+
         home_button.on_click(go_home)
         return home_button
 
-    def transparent_button_panel(self):
+    def input_panel(self):
         def transparent_bar(*events):
             self.set_transparent()
 
         def transparent_cross(*events):
             self.set_transparent(bar=False)
+
+        def reset(*events):
+            self.reset_control()
 
         def alternating(*events):
             self.set_input(np.asarray((1, 0, 1, 0, 1)))
@@ -202,7 +196,7 @@ class TriangularMeshImager(ActivePhotonicsImager):
 
         def basis(i: int):
             def f(*events):
-                self.set_input(np.asarray(np.eye(self.n + 1)[i]))
+                self.set_input(np.asarray(np.eye(5)[i]))
             return f
 
         bar_button = pn.widgets.Button(name='Transparent (Bar)')
@@ -217,116 +211,87 @@ class TriangularMeshImager(ActivePhotonicsImager):
         for i, button in enumerate(button_list):
             button.on_click(basis(i))
         buttons = pn.Row(*button_list)
-        return pn.Column(bar_button, cross_button, alternating_button, uniform_button, buttons)
+        reset_button = pn.widgets.Button(name='Zero Voltages')
+        reset_button.on_click(reset)
+        return pn.Column(reset_button, bar_button, cross_button, alternating_button, uniform_button, buttons)
 
     def set_unitary(self, u):
-        _, thetas, phis = reck_decomposition(u)
-        for theta_ps, theta in zip(self.ps_to_mesh['theta_mesh'], thetas[::-1]):
-            self.set_phase(theta_ps, theta)
-        for phi_ps, phi in zip(self.ps_to_mesh['phi_mesh'], phis[::-1]):
-            self.set_phase(phi_ps, phi)
+        thetas, phis, _, phases = reck(u)
+        for theta_ps, theta in zip(self.network['theta_mesh'], thetas[::-1]):
+            self.ps[tuple(theta_ps)].phase = theta
+        for phi_ps, phi in zip(self.network['phi_mesh'], phis[::-1]):
+            self.ps[tuple(phi_ps)].phase = phi
+        return phases
 
-    def nidaqmx_spot_callback(self):
-        p = []
-
-        def spot_update(task_idx, every_n_samples_event_type, num_of_samples, callback_data):
-            p.append(self.camera.spot_powers)
-            return 0
-
-        return p, spot_update
-
-    def mesh_panel(self, cmap: str = 'hot'):
+    def mesh_panel(self, power_cmap: str = 'hot', ps_cmap: str = 'greens'):
         polys = [np.asarray(p.exterior.coords.xy).T
                  for multipoly in mesh.path_array.flatten()
                  for p in multipoly]
         waveguides = hv.Polygons(polys).opts(data_aspect=1, frame_height=200,
                                              ylim=(-10, 70), xlim=(0, mesh.size[0]),
                                              color='black', line_width=2)
-        colored_polys = lambda data: hv.Polygons(
+        phase_shift_polys = [np.asarray(p.buffer(1).exterior.coords.xy).T
+                             for p in mesh.phase_shifter_array('m1am')[::3]]
+        labels = np.fliplr(np.fliplr(np.mgrid[0:6, 0:19]).reshape((2, -1)).T)
+        centroids = [(poly.centroid.x, poly.centroid.y) for poly in mesh.phase_shifter_array('m1am')[::3]]
+
+        text = hv.Overlay([hv.Text(centroid[0],
+                                   centroid[1] + mesh.interport_distance / 2,
+                                   f'{label[0]},{label[1]}', fontsize=7)
+                           for label, centroid in zip(list(labels), centroids) if tuple(label) in self.ps])
+
+        power_polys = lambda data: hv.Polygons(
             [{('x', 'y'): poly, 'power': z} for poly, z in zip(polys, data)], vdims='power'
         )
-        powers_mesh = hv.DynamicMap(colored_polys, streams=[self.mesh_pipe]).opts(
-            data_aspect=1, frame_height=200, ylim=(-10, 70),
-            xlim=(0, mesh.size[0]), line_color='none', cmap=cmap, shared_axes=False
+        ps_polys = lambda data: hv.Polygons(
+            [{('x', 'y'): poly, 'phase_shift': z} for poly, z in zip(phase_shift_polys, data)], vdims='phase_shift'
         )
-        self.mesh_pipe.send(np.full(len(polys), np.nan))
-        image_button = pn.widgets.Button(name='Mesh Image')
+        powers = hv.DynamicMap(power_polys, streams=[self.power_pipe]).opts(
+            data_aspect=1, frame_height=200, ylim=(-10, 70),
+            xlim=(0, mesh.size[0]), line_color='none', cmap=power_cmap, shared_axes=False
+        )
+        ps = hv.DynamicMap(ps_polys, streams=[self.ps_pipe]).opts(
+            data_aspect=1, frame_height=200, ylim=(-10, 70),
+            xlim=(0, mesh.size[0]), line_color='none', cmap=ps_cmap, shared_axes=False, clim=(0, 2 * np.pi)
+        )
+        self.power_pipe.send(np.full(len(polys), np.nan))
+        self.ps_pipe.send(np.full(len(phase_shift_polys), np.nan))
+
         def mesh_image(*events):
             self.update_mesh_image()
+        image_button = pn.widgets.Button(name='Mesh Image')
         image_button.on_click(mesh_image)
-        return pn.Column(waveguides * powers_mesh, image_button)
+
+        def read_output(*events):
+            self.read_output(update_mesh=True)
+        read_button = pn.widgets.Button(name='Self-Configure (Read) Output')
+        read_button.on_click(read_output)
+
+        return pn.Column(ps * waveguides * powers * text, pn.Row(image_button, read_button))
 
     def update_mesh_image(self):
-        powers, spots = self.mesh_img(self.n + 2)
+        powers, spots = self.mesh_img(6)
         powers[powers <= 0] = 0
         powers = np.flipud(np.sqrt(powers / np.max(powers)))
-        self.mesh_pipe.send([p for p, multipoly in zip(powers.flatten(), mesh.path_array.flatten())
-                             for _ in multipoly])
+        self.power_pipe.send([p for p, multipoly in zip(powers.flatten(), mesh.path_array.flatten())
+                              for _ in multipoly])
+        data = np.zeros((6, 19))
+        for loc in self.ps:
+            data[loc[1], loc[0]] = self.ps[loc].phase
+        self.ps_pipe.send(np.flipud(data).flatten())
 
-    def calibrate(self, ps: Tuple[int, int], spot: Tuple[int, int] = None, lower: bool = False, vmax: float = 5.5,
-                  n_samples: int = 10000, p0: Tuple[float, ...] = (1, 0, 0, 0.3, 0, 0),
-                  pbar: Optional[Callable] = None):
-        if spot is None:
-            layer, idx = ps
-            if not lower:
-                idx -= 1  # ensures if theta PS is the top of the MZI
-            vs, powers = self.mesh_sweep(ps, layer - 1, vlim=(0, vmax), n_samples=n_samples, pbar=pbar)
-        else:
-            layer, idx = spot
-            vs, powers = self.mesh_sweep(ps, layer, vlim=(0, vmax), n_samples=n_samples, pbar=pbar)
-        idx_t, idx_r = (idx * 3, (idx + 1) * 3)
-        ts = powers[idx_t] / (powers[idx_t] + powers[idx_r])
-        p, _ = curve_fit(cal_v_power, vs, ts, p0=p0)
-        q, _ = curve_fit(cal_phase_v, np.polyval(p[2:], vs), vs ** 2)
-        self.ps_calibrations[ps] = np.vstack([p[2:], q])
-        return vs, powers
-
-    def set_transparent(self, bar: bool = True):
-        for ps in self.ps_calibrations:
-            self.set_phase(ps, np.pi if bar else 0)
-
-    def set_phase(self, ps: Tuple[int, int], phase: float):
-        """Set the phase shifter in the mesh using raw phase value
+    def set_transparent(self, bar: bool = True, theta_only: bool = False):
+        """
 
         Args:
-            ps: phase shifter grid location in the mesh
-            phase: phase to convert in the range [0, 2 * pi)
+            bar:
+            theta_only:
 
         Returns:
 
         """
-        # TODO(sunil): fix this calibration!
-        phase = np.mod(np.pi - phase, 2 * np.pi) if ps == (13, 3) else phase
-        p = phase / 2 + np.pi
-        self.control.write_chan(self.ps_to_channel[ps], self.p2v(ps, p))
-
-    def v2p(self, ps: Tuple[int, int], voltage: float):
-        """Voltage to phase conversion for a give phase shifter
-
-        Args:
-            ps: phase shifter grid location in the mesh
-            voltage: voltage to convert
-
-        Returns:
-            Phase converted from voltage
-
-        """
-        p, _ = self.ps_calibrations[ps]
-        return np.polyval(p, voltage)
-
-    def p2v(self, ps: Tuple[int, int], phase: float):
-        """Phase to voltage conversion for a give phase shifter
-
-        Args:
-            ps: phase shifter grid location in the mesh
-            phase: phase to convert
-
-        Returns:
-            Voltage converted from phase
-
-        """
-        _, q = self.ps_calibrations[ps]
-        return np.sqrt(np.abs(np.polyval(q, phase)))  # abs suppresses in case negative value
+        for ps in self.thetas if theta_only else {**self.thetas, **self.phis}:
+            self.ps[ps].phase = np.pi if bar else 0
 
     def calibrate_thetas(self, pbar: Optional[Callable] = None) -> Dict[Tuple[int, int], np.ndarray]:
         """Row-wise calibration of the :math:`\\theta` phase shifters
@@ -338,77 +303,76 @@ class TriangularMeshImager(ActivePhotonicsImager):
             Voltages used for the calibration and the resulting powers
 
         """
+        self.reset_control()
         idx = 0
-        powers = {}
-        self.set_transparent()
+        iterator = self.thetas.values() if pbar is None else pbar(self.thetas.values())
+        for ps in iterator:
+            print(ps.grid_loc)
+            if ps.spot_loc[1] > idx:
+                input_ps = tuple(self.network['theta_left'][idx])
+                self.ps[input_ps].phase = 0
+                idx += 1
+            ps.calibrate(pbar)
+            ps.phase = np.pi
 
-        for thetas in pbar(self.theta_cal_cfg):
-            idx += 1
-            for ps in pbar(thetas):
-                _, p = self.calibrate(ps, pbar=pbar, lower=ps[1] < idx,
-                                      p0=(1, 0, 0, 0.3, 0, -np.pi / 2) if ps == (15, 2) else (1, 0, 0, 0.3, 0, 0))
-                powers[ps] = p
-                self.set_phase(ps, np.pi)  # bar state
-            self.set_phase(thetas[0], 0)  # cross state
-        return powers
+    def calibrate_phis(self, pbar: Optional[Callable] = None):
+        self.reset_control()
+        # since the thetas are calibrated
+        self.set_transparent(theta_only=True)
+        idx = 0
+        iterator = self.phis.values() if pbar is None else pbar(self.phis.values())
+        for ps in iterator:
+            print(ps.grid_loc)
+            if ps.spot_loc[1] > idx:
+                input_ps = tuple(self.network['theta_left'][idx])
+                self.ps[input_ps].phase = 0
+                idx += 1
+            ps.calibrate(pbar)
+            ps.phase = 0
 
-    def calibrate_phis(self, pbar: Optional[Callable] = None) -> Dict[Tuple[int, int], np.ndarray]:
-        self.set_transparent()
-        for t in self.ps_to_mesh['theta_left']:
-            self.set_phase(t, 0)
-        powers = {}
-        for i, meta_mzis in enumerate(self.phi_cal_cfg):
-            self.set_phase(self.ps_to_mesh['theta_left'][3 - i], np.pi)
-            for spot, thetas_phis in meta_mzis.items():
-                thetas, phis = thetas_phis['thetas'], thetas_phis['phis']
-                # meta-MZI
-                for t in thetas:
-                    self.set_phase(t, np.pi / 2)
-                for ps in phis:
-                    print(ps)
-                    _, p = self.calibrate(ps, pbar=pbar, spot=spot,
-                                          p0=(1, 0, 0, 0.3, 0, -np.pi / 2) if ps == (14, 0) else (1, 0, 0, 0.3, 0, 0))
-                    powers[ps] = p
-                    self.set_phase(ps, 0)
-                for t in thetas:
-                    self.set_phase(t, np.pi)
-        return powers
-
-    def set_input(self, vector: np.ndarray, forward: bool = True):
-        n = self.n
-        vector = vector.conj() / np.sum(np.abs(vector)) * n / (n + 1)
-        vector = np.append(vector, 1 / (n + 1))
+    def set_input(self, vector: np.ndarray, add_normalization: bool = False, theta_only: bool = False):
+        n = 4
+        vector = vector.conj()
+        if add_normalization:
+            vector = vector / np.sqrt(np.sum(np.abs(vector))) * np.sqrt(n / (n + 1))
+            vector = np.append(vector, np.sqrt(1 / (n + 1)))
         # design inconsistency on chip led to this:
-        lower_phi = (0, 0, 0, 0, 0) if forward else (0, 0, 1, 0, 0)
+        lower_phi = (0, 0, 1, 0, 0) if self.backward else (0, 0, 0, 0, 0)
         lower_theta = (0, 0, 0, 0, 0)
 
         thetas, phis = vector_to_phases(vector, lower_theta, lower_phi)
 
         for i in range(n):
             phase = {'theta': thetas[i], 'phi': phis[i]}
-            for var in ('theta', 'phi'):
-                key = f'{var}_left' if forward else f'{var}_right'
-                ps = self.ps_to_mesh[key][i]
-                self.set_phase(ps, phase[var])
+            for var in ('theta',) if theta_only else ('theta', 'phi'):
+                key = f'{var}_right' if self.backward else f'{var}_left'
+                self.set_phase(self.network[key][i], phase[var])
+        self.set_phase(self.network['theta_ref'], np.pi)
 
-    def read_output(self, forward: bool = True, pbar: Optional[Callable] = None, update_mesh: bool = False):
-        direction = 'right' if forward else 'true'
-        theta_ps = self.ps_to_mesh[f'theta_{direction}'][::-1]
-        phi_ps = self.ps_to_mesh[f'phi_{direction}'][::-1]
+    def set_phase(self, ps, phase):
+        self.ps[tuple(ps)].phase = phase
+
+    @property
+    def phases(self):
+        return {loc: self.ps[loc].phase for loc in self.ps}
+
+    def read_output(self, pbar: Optional[Callable] = None, update_mesh: bool = False):
+        direction = 'left' if self.backward else 'right'
+        theta_ps = self.network[f'theta_{direction}'][::-1]
+        phi_ps = self.network[f'phi_{direction}'][::-1]
 
         theta_vs, phi_vs = [], []
 
-        lower_phi = (0, 0, 0, 0, 0) if forward else (0, 0, 1, 0, 0)
+        lower_phi = (0, 0, 1, 0, 0) if self.backward else (0, 0, 0, 0, 0)
         lower_theta = (0, 0, 0, 0, 0)
 
-        self.to_layer(self.n * 4 if forward else 0)
+        self.to_layer(0 if self.backward else 16)
 
         # TODO(sunil): fix hardcoding
-        for i in range(self.n):
-            v_theta, v_phi = self.nullify(theta=theta_ps[i], phi=phi_ps[i], move=False, spot=(16, 4 - i),
-                                          n_samples=501, wait_time=0.01, pbar=None, bottom=False)
-            theta_vs.append(self.v2p(theta_ps[i], v_theta))
-            phi_vs.append(self.v2p(phi_ps[i], v_phi))
+        for i in range(4):
+            theta, phi = tuple(theta_ps[i]), tuple(phi_ps[i])
+            phi_vs.append(self.ps[phi].opt_spot(spot=(16, 3 - i), n_samples=501, wait_time=0.01, move=False)[0])
+            theta_vs.append(self.ps[theta].opt_spot(spot=(16, 3 - i), n_samples=501, wait_time=0.01, move=False)[0])
             if update_mesh:
                 self.update_mesh_image()
 
@@ -417,46 +381,84 @@ class TriangularMeshImager(ActivePhotonicsImager):
 
         return phases_to_vector(thetas, phis, lower_theta, lower_phi)
 
-    def read_panel(self, update_mesh: bool = True):
-        read_button = pn.widgets.Button(name='Self-Configure (Read) Output')
-        def mesh_image(*events):
-            self.read_output(update_mesh=True)
-        read_button.on_click(mesh_image)
-        return read_button
-
-    def calibrate_panel(self, ps=(17, 1)):
-        vs = np.sqrt(np.linspace(0, 5.5 ** 2, 10000))
-        p = self.theta_p[ps] if ps in self.theta_p else self.phi_p[ps]
-        idx = (ps[1] - 1) * 3
-        return pn.Column(
-            hv.Overlay([
-                hv.Curve((vs ** 2, p[idx] / (p[idx + 3] + p[idx])), label='reflectivity'),
-                hv.Curve((vs ** 2, p[idx + 3] / (p[idx + 3] + p[idx])), label='transmissivity'),
-                hv.Curve((vs ** 2, p[idx] / p[idx + 2]), label='upper out'),
-                hv.Curve((vs ** 2, p[idx + 3] / p[idx + 2]), label='lower out'),
-                hv.Curve((vs ** 2, p[idx + 1] / (p[idx + 1] + p[idx + 4])), label='upper arm'),
-                hv.Curve((vs ** 2, p[idx + 4] / (p[idx + 1] + p[idx + 4])), label='lower arm'),
-                hv.Curve((vs ** 2, (p[idx + 1] + p[idx + 4]) / p[idx + 2]), label='total arm'),
-                hv.Curve((vs ** 2, (p[idx + 0] + p[idx + 3]) / p[idx + 2]), label='total out')
-            ]).opts(width=800, height=400, legend_position='right', shared_axes=False,
-                    title='MZI Inspection Curves'),
-            pn.Row(
-                hv.Overlay([hv.Curve((self.v2p(t, vs) / np.pi * 2, vs)) for t in {**self.phi_p, **self.theta_p} if
-                            t != (14, 0)]).opts(
-                    xlabel='Phase (θ)', ylabel='Voltage (V)').opts(shared_axes=False, title='Calibration Curves',
-                                                                   xformatter='%fπ'),
-                hv.Overlay([hv.Curve((vs, self.v2p(t, vs) / np.pi * 2)) for t in {**self.phi_p, **self.theta_p} if
-                            t != (14, 0)]).opts(
-                    ylabel='Phase (θ)', xlabel='Voltage (V)').opts(shared_axes=False, yformatter='%fπ')
-            )
+    def calibrate_panel(self):
+        vs = np.sqrt(np.linspace(2 ** 2, 5.5 ** 2, 10000))
+        ps_dropdown = pn.widgets.Select(
+            name="Phase Shifter", options=[f"{ps[0]}, {ps[1]}" for ps in self.ps], value="1, 1"
+        )
+        calibrated_values = pn.Row(
+            hv.Overlay([hv.Curve((ps.v2p(vs) / np.pi * 2, vs)) for _, ps in self.ps.items()]).opts(
+                xlabel='Phase (θ)', ylabel='Voltage (V)').opts(shared_axes=False, title='Calibration Curves',
+                                                               xformatter='%fπ'),
+            hv.Overlay([hv.Curve((vs, ps.v2p(vs) / np.pi * 2)) for _, ps in self.ps.items()]).opts(
+                ylabel='Phase (θ)', xlabel='Voltage (V)').opts(shared_axes=False, yformatter='%fπ')
         )
 
-    def get_opow_hash(self, input_bits):
+        @pn.depends(ps_dropdown.param.value)
+        def calibration_image(value):
+            ps_tuple = tuple([int(c) for c in value.split(', ')])
+            p = self.ps[ps_tuple].calibration
+            if p is None:
+                raise ValueError(f'Expected calibration field in phase shifter {ps_tuple} but got None.')
+            return pn.Column(
+                hv.Overlay([
+                    hv.Curve((vs ** 2, p.upper_split_ratio), label='upper split'),
+                    hv.Curve((vs ** 2, p.lower_split_ratio), label='lower split'),
+                    hv.Curve((vs ** 2, p.split_ratio_fit), label='lower split fit').opts(opts.Curve(line_dash='dashed')),
+                    hv.Curve((vs ** 2, p.upper_out), label='upper out'),
+                    hv.Curve((vs ** 2, p.lower_out), label='lower out'),
+                    hv.Curve((vs ** 2, p.upper_arm), label='upper arm'),
+                    hv.Curve((vs ** 2, p.lower_arm), label='lower arm'),
+                    hv.Curve((vs ** 2, p.total_arm), label='total arm'),
+                    hv.Curve((vs ** 2, p.total_out), label='total out')
+                ]).opts(width=800, height=400, legend_position='right', shared_axes=False,
+                        title='MZI Inspection Curves', xlabel='Electrical Power (Vsqr)', ylabel='Recorded Values'),
+            )
+
+        def abs_phase(phase: float):
+            def f(*events):
+                ps = tuple([int(c) for c in ps_dropdown.value.split(', ')])
+                self.set_phase(ps, phase)
+            return f
+
+        def invert(*events):
+            ps = tuple([int(c) for c in ps_dropdown.value.split(', ')])
+            self.set_phase(ps, 2 * np.pi - self.ps[ps].phase)
+
+        def rel_phase(phase_change: float):
+            def f(*events):
+                ps = tuple([int(c) for c in ps_dropdown.value.split(', ')])
+                self.set_phase(ps, np.mod(self.ps[ps].phase + phase_change, 2 * np.pi))
+            return f
+
+        button_function_pairs = [
+            (pn.widgets.Button(name='0', width=40), abs_phase(0)),
+            (pn.widgets.Button(name='π/2', width=40), abs_phase(np.pi / 2)),
+            (pn.widgets.Button(name='π', width=40), abs_phase(np.pi)),
+            (pn.widgets.Button(name='3π/2', width=40), abs_phase(3 * np.pi / 2)),
+            (pn.widgets.Button(name='-θ', width=40), invert),
+            (pn.widgets.Button(name='+π', width=40), rel_phase(np.pi)),
+            (pn.widgets.Button(name='-π', width=40), rel_phase(-np.pi)),
+            (pn.widgets.Button(name='+π/2', width=40), rel_phase(np.pi / 2)),
+            (pn.widgets.Button(name='-π/2', width=40), rel_phase(-np.pi / 2))
+        ]
+
+        for b, f in button_function_pairs:
+            b.on_click(f)
+
+        buttons = [b[0] for b in button_function_pairs]
+
+        return pn.Column(
+            ps_dropdown,
+            pn.Row(*buttons),
+            calibration_image,
+            calibrated_values,
+        )
+
+    def get_opow_hash(self, input_obj):
         hasher1 = hashlib.sha3_256()
-        hasher1.update(input)
-        x = []
-        for k in range(64):
-            x.append(0)
+        hasher1.update(input_obj)
+        x = list(np.zeros(64))
         for i in range(0, 64, 2):
             j = i >> 1
             x[i] = hasher1.digest()[j] >> 4
@@ -476,3 +478,156 @@ class TriangularMeshImager(ActivePhotonicsImager):
         hasher2.update(preout)
         final_hash = hasher2.digest()
         return final_hash
+
+    def to_calibration_file(self, filename: str):
+        with open(filename, 'wb') as f:
+            pickle.dump({ps.grid_loc: ps.calibration.dict for loc, ps in self.ps.items()}, f)
+
+    def calibrate_all(self, pbar: Optional[Callable] = None):
+        self.calibrate_thetas(pbar)
+        self.calibrate_phis(pbar)
+
+
+class PhaseShifter:
+    def __init__(self, grid_loc: Tuple[int, int], spot_loc: Tuple[int, int],
+                 voltage_channel: int, mesh: TriangularMeshImager,
+                 meta_ps: Optional[Tuple[Tuple[int, int], Tuple[int, int]]] = None,
+                 calibration: Optional[PhaseCalibration] = None):
+        self.grid_loc = tuple(grid_loc)
+        self.spot_loc = tuple(spot_loc)
+        self.voltage_channel = voltage_channel
+        self.meta_ps = [] if meta_ps is None else meta_ps
+        self.mesh = mesh
+        self.calibration = calibration
+        self._phase = np.pi
+
+    def calibrate(self, pbar: Optional[Callable] = None, vlim: Tuple[float, float] = (2, 5.5),
+                  p0: Tuple[float, ...] = (1, 0, 0, 0.3, 0, 0), n_samples: int = 10000):
+        """Calibrate the phase shifter, setting calibration object to a new PhaseCalibration
+
+        Args:
+            pbar: Progress bar to keep track of the calibration time
+            vlim: Voltage limits
+            p0: Fit function initial value
+            n_samples: Number of samples
+
+        Returns:
+
+        """
+
+        layer, idx = self.spot_loc
+        logger.info(f'Calibration of phase shifter {self.grid_loc} at spot {self.spot_loc}')
+        for t in self.meta_ps:
+            self.mesh.set_phase(t, np.pi / 2)
+        vs, powers = self.mesh.sweep(self.voltage_channel,
+                                     layer, vlim=vlim, n_samples=n_samples, pbar=pbar)
+        for t in self.meta_ps:
+            self.mesh.set_phase(t, np.pi)
+        self.calibration = PhaseCalibration(vs, powers, self.spot_loc, p0=p0)
+
+    def v2p(self, voltage: float):
+        """Voltage to phase conversion for a give phase shifter
+
+        Args:
+            voltage: voltage to convert
+
+        Returns:
+            Phase converted from voltage
+
+        """
+        return self.calibration.v2p(voltage)
+
+    def p2v(self, phase: float):
+        """Phase to voltage conversion for a give phase shifter
+
+        Args:
+            phase: phase to convert
+
+        Returns:
+            Voltage converted from phase
+
+        """
+        return self.calibration.p2v(phase)
+
+    @property
+    def dict(self):
+        return {
+            'grid_loc': self.grid_loc,
+            'spot_loc': self.spot_loc,
+            'voltage_channel': self.voltage_channel,
+            'meta_ps': self.meta_ps
+        }
+
+    @property
+    def phase(self):
+        return self._phase
+
+    @phase.setter
+    def phase(self, phase: float):
+        """Set the phase shifter in radians
+
+        Args:
+            phase: phase shift in the range [0, 2 * pi)
+
+        Returns:
+
+        """
+        self.mesh.control.write_chan(self.voltage_channel, self.p2v(phase))
+        self._phase = phase
+
+    def reset(self):
+        """Reset the phase voltage to 0V and set the phase shift to np.nan
+
+        Args:
+
+        Returns:
+
+        """
+        # offset in temperature to reduce instability during calibration
+        self.mesh.control.write_chan(self.voltage_channel, 2)
+        self._phase = np.nan  # there might not be a phase defined here, so we just treat it as nan.
+
+    def opt_spot(self, spot: Optional[Tuple[int, int]] = None,
+                 wait_time: float = 0, n_samples: int = 1000,
+                 pbar: Optional[Callable] = None, move: bool = True):
+        """Maximize the power at a spot by sweeping the phase shift voltage
+
+        Args:
+            spot: Spot to minimize power
+            wait_time: Wait time between samples
+            n_samples: Number of samples
+            pbar: Progress bar handle
+            move: Whether to move the stage (to save time, set to false if the stage doesn't move)
+
+        Returns:
+
+        """
+        layer, idx = self.spot_loc if spot is None else spot
+        if move:
+            self.mesh.to_layer(layer)
+        max_phase = 2 * np.pi if len(self.meta_ps) == 2 else np.pi  # cheat to distinguish between theta and phi
+
+        phases = np.linspace(0, max_phase, n_samples)
+        iterator = pbar(phases) if pbar is not None else phases
+        self.phase = 0
+        time.sleep(1)
+        powers = []
+        for phase in iterator:
+            self.phase = phase
+            time.sleep(wait_time)
+            p = self.mesh.camera.spot_powers
+            powers.append(p[3 * idx] / (p[3 * idx] + p[3 * idx + 3]))
+        opt_ps = phases[np.argmax(powers)]
+        self.phase = opt_ps
+        return opt_ps, powers
+
+        # vlim = (self.p2v(0), self.p2v(max_phase)) if vlim is None else vlim
+        # vs, powers = self.mesh.sweep(self.voltage_channel,
+        #                              layer - 1, vlim=vlim, wait_time=wait_time,
+        #                              n_samples=n_samples, pbar=pbar, move=move)
+        # logger.info(f'Minimize power for phase shifter {self.grid_loc}, at spot {spot}')
+        # split_ratios = powers[idx, 0]
+        # opt_ps = vs[np.argmin(split_ratios)]
+        #
+        # self.mesh.control.write_chan(self.voltage_channel, opt_ps)
+        # return opt_ps

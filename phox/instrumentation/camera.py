@@ -153,9 +153,11 @@ class XCamera:
         self.set_integration_time(integration_time)
         self.integration_time = integration_time * 1e-6
         self.livestream_pipe = Pipe(data=[])
+        self.power_pipe = Pipe(data=[])
         self.spots = [] if spots is None else spots
         self.spot_powers = []
         self.livestream_on = False
+        self.power_det_on = False
 
     def start(self) -> int:
         self.started = True
@@ -243,6 +245,8 @@ class XCamera:
             A video livestream for the camera
 
         """
+
+        # livestream
         bounded_img = lambda data: hv.Image(data, bounds=(0, 0, 640, 512))
         dmap = hv.DynamicMap(bounded_img, streams=[self.livestream_pipe]).opts(
             width=640, height=512, show_grid=True, colorbar=True, cmap=cmap,
@@ -251,10 +255,10 @@ class XCamera:
         self.livestream_pipe.send(np.fliplr(self.frame().astype(np.float)))
 
         @gen.coroutine
-        def update_plot():
+        def update_img():
             self.livestream_pipe.send(np.fliplr(self.frame().astype(np.float)))
 
-        cb = PeriodicCallback(update_plot, 100)
+        cb = PeriodicCallback(update_img, 100)
 
         def change_livestream(*events):
             for event in events:
@@ -268,6 +272,31 @@ class XCamera:
         livestream_toggle.param.watch(change_livestream, 'value')
 
         return pn.Column(dmap, livestream_toggle)
+
+    def power_panel(self):
+        def power_bars(data):
+            return hv.Bars(data, hv.Dimension('Port'), 'Fractional power').opts(ylim=(0, 1))
+        dmap = hv.DynamicMap(power_bars, streams=[self.power_pipe]).opts(shared_axes=False)
+        power_toggle = pn.widgets.Toggle(name='Power', value=False)
+
+        @gen.coroutine
+        def update_plot():
+            self.power_pipe.send([(i, p) for i, p in enumerate(self.spot_powers[::3] / np.sum(self.spot_powers[::3]))])
+
+        cb = PeriodicCallback(update_plot, 100)
+
+        def change_power(*events):
+            for event in events:
+                if event.name == 'value':
+                    self.power_det_on = bool(event.new)
+                    if self.power_det_on:
+                        cb.start()
+                    else:
+                        cb.stop()
+
+        power_toggle.param.watch(change_power, 'value')
+
+        return pn.Column(dmap, power_toggle)
 
 
 def _get_grating_spot(img: np.ndarray, center: Tuple[int, int], window_size: Tuple[int, int]) -> Tuple[np.ndarray, np.ndarray]:
