@@ -40,7 +40,7 @@ class ActivePhotonicsImager:
         self.stage = ASI(port=stage_port)
         self.stage.connect()
         logger.info('Connecting to mesh voltage control...')
-        self.control = NIDAQControl(vmax)
+        self.control = NIDAQControl(0, vmax)
         logger.info('Connecting to laser...')
         self.laser = LaserHP8164A(port=laser_port)
         self.laser.connect()

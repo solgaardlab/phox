@@ -9,11 +9,12 @@ import panel as pn
 
 
 class NIDAQControl:
-    def __init__(self, vmax: float = 6):
+    def __init__(self, vmin: float = 0, vmax: float = 5):
         self.system = nidaqmx.system.System.local()
         self.ao_channels = [channel for device in self.system.devices
                             for channel in device.ao_physical_chans]
         self.vmax = vmax
+        self.vmin = vmin
 
     def reset(self):
         for device in self.system.devices:
@@ -53,6 +54,8 @@ class NIDAQControl:
         """
         if np.sum(voltages > self.vmax) > 0:
             raise ValueError(f'All voltages written to channel must be <= {self.vmax}.')
+        if np.sum(voltages < self.vmin) > 0:
+            raise ValueError(f'All voltages written to channel must be >= {self.vmin}.')
 
         num_voltages = 1 if not isinstance(voltages, np.ndarray) else voltages.size
         task = nidaqmx.Task()
