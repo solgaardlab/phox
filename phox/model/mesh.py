@@ -145,9 +145,11 @@ class Mesh(Device):
         theta_polys = lambda data: hv.Polygons(
             [{('x', 'y'): poly, 'theta': z} for poly, z in zip(theta_geoms, data)], vdims='theta'
         )
+        theta_bg = hv.Polygons([np.asarray(p.buffer(3).exterior.coords.xy).T for p in self.theta_array]).opts(color='darkgreen')
         phi_polys = lambda data: hv.Polygons(
             [{('x', 'y'): poly, 'phi': z} for poly, z in zip(phi_geoms, data)], vdims='phi'
         )
+        phi_bg = hv.Polygons([np.asarray(p.buffer(3).exterior.coords.xy).T for p in self.phi_array]).opts(color='darkblue')
 
         powers = hv.DynamicMap(power_polys, streams=[self.power_pipe]).opts(
             data_aspect=1, frame_height=height, ylim=(-10, self.size[1] + 10), line_color='none', cmap=power_cmap,
@@ -193,9 +195,8 @@ class Mesh(Device):
         reset_button = pn.widgets.Button(name='Reset phases')
         reset_button.on_click(lambda *events: self.reset_phases())
 
-        plot = theta * theta_text * phi * phi_text * waveguides * powers.options(colorbar=True, clim=(0, 1),
-                                                                                 title=title,
-                                                                                 tools=['hover', 'tap'])
+        plot = theta_bg * theta * theta_text * phi_bg * phi * phi_text * waveguides * powers.options(
+            colorbar=True, clim=(0, 1), title=title, tools=['hover', 'tap'])
 
         def pi_formatter(value):
             return f'{value:.1f}π'
@@ -218,9 +219,11 @@ class Mesh(Device):
                 color='black', spike_length=1 / 2 * np.pi) * curve.relabel(f'U(2π)')
 
         theta_plot = hv.DynamicMap(theta_plot_, streams=[sel_theta, self.theta_pipe]).opts(shared_axes=False,
-                                                                                           xformatter=pi_formatter)
+                                                                                           xformatter=pi_formatter,
+                                                                                           height=200)
         phi_plot = hv.DynamicMap(phi_plot_, streams=[sel_phi, self.phi_pipe]).opts(shared_axes=False,
-                                                                                   xformatter=pi_formatter)
+                                                                                   xformatter=pi_formatter,
+                                                                                   height=200)
 
         if wide:
             return pn.Column(plot, pn.Row(pn.Column(theta_set, theta_plot), pn.Column(phi_set, phi_plot), reset_button))
