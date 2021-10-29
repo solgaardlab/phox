@@ -153,7 +153,6 @@ class XCamera:
         self.set_integration_time(integration_time)
         self.integration_time = integration_time * 1e-6
         self.livestream_pipe = Pipe(data=[])
-        self.power_pipe = Pipe(data=[(i, 0) for i in range(6)])
         self.spots = [] if spots is None else spots
         self.spot_powers = []
         self.livestream_on = False
@@ -272,40 +271,6 @@ class XCamera:
         livestream_toggle.param.watch(change_livestream, 'value')
 
         return pn.Column(dmap, livestream_toggle)
-
-    @property
-    def fractional_right(self):
-        return self.spot_powers[::3] / np.sum(self.spot_powers[::3])
-
-    @property
-    def fractional_left(self):
-        return self.spot_powers[2::3] / np.sum(self.spot_powers[2::3])
-
-    def power_panel(self):
-        def power_bars(data):
-            return hv.Bars(data, hv.Dimension('Port'), 'Fractional power').opts(ylim=(0, 1))
-        dmap = hv.DynamicMap(power_bars, streams=[self.power_pipe]).opts(shared_axes=False)
-        power_toggle = pn.widgets.Toggle(name='Power', value=False)
-        lr_toggle = pn.widgets.Toggle(name='Left Spots', value=False)
-
-        @gen.coroutine
-        def update_plot():
-            self.power_pipe.send([(i, p) for i, p in enumerate(self.fractional_left
-                                                               if lr_toggle.value else self.fractional_right)])
-        cb = PeriodicCallback(update_plot, 100)
-
-        def change_power(*events):
-            for event in events:
-                if event.name == 'value':
-                    self.power_det_on = bool(event.new)
-                    if self.power_det_on:
-                        cb.start()
-                    else:
-                        cb.stop()
-
-        power_toggle.param.watch(change_power, 'value')
-
-        return pn.Column(dmap, power_toggle, lr_toggle)
 
 
 def _get_grating_spot(img: np.ndarray, center: Tuple[int, int], window_size: Tuple[int, int]) -> Tuple[np.ndarray, np.ndarray]:

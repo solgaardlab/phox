@@ -2,6 +2,8 @@ from typing import Tuple, Callable, Optional, Dict
 
 from holoviews import opts
 from holoviews.streams import Pipe
+from tornado import gen
+from tornado.ioloop import PeriodicCallback
 
 from .activephotonicsimager import ActivePhotonicsImager, _get_grating_spot
 from ..instrumentation import XCamera
@@ -11,16 +13,14 @@ from dphox.demo import mzi
 import time
 import numpy as np
 
-from ..model.meshsim import reck, random_complex
+from simphox.circuit import triangular
+from simphox.utils import random_unitary, random_vector
 from ..utils import vector_to_phases, phases_to_vector
 import panel as pn
 import pickle
 
-from scipy.stats import unitary_group
-
 import logging
 import holoviews as hv
-import hashlib
 
 from ..model.phase import PhaseCalibration
 
@@ -28,23 +28,60 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 mesh = LocalMesh(mzi, 6)
-PS_LAYER = 'm1am'
+PS_LAYER = 'heater'
 
-class TriangularMeshImager(ActivePhotonicsImager):
+SPUTNIK_CONFIG = {
+    "network": {"theta_left": [[1, 1], [3, 2], [5, 3], [7, 4]], "phi_left": [[2, 1], [4, 2], [6, 3], [8, 4]],
+                "theta_right": [[17, 1], [15, 2], [13, 3], [11, 4]], "phi_right": [[16, 1], [14, 2], [12, 2], [10, 4]],
+                "theta_mesh": [[5, 0], [7, 1], [9, 2], [9, 0], [11, 1], [13, 0]],
+                "phi_mesh": [[4, 0], [6, 1], [8, 2], [8, 0], [10, 1], [12, 0]], "theta_ref": [9, 5],
+                "theta_rows": [[[1, 1], [5, 0], [9, 0], [13, 0], [17, 1]], [[3, 2], [7, 1], [11, 1], [15, 2]],
+                               [[5, 3], [9, 2], [13, 3]], [[7, 4], [11, 4]], [[9, 5]]]},
+    "thetas": [{"grid_loc": [1, 1], "spot_loc": [0, 0], "voltage_channel": 5, "meta_ps": []},
+               {"grid_loc": [5, 0], "spot_loc": [4, 0], "voltage_channel": 17, "meta_ps": []},
+               {"grid_loc": [9, 0], "spot_loc": [8, 0], "voltage_channel": 39, "meta_ps": []},
+               {"grid_loc": [13, 0], "spot_loc": [12, 0], "voltage_channel": 48, "meta_ps": []},
+               {"grid_loc": [17, 1], "spot_loc": [16, 0], "voltage_channel": 59, "meta_ps": []},
+               {"grid_loc": [3, 2], "spot_loc": [2, 1], "voltage_channel": 7, "meta_ps": []},
+               {"grid_loc": [7, 1], "spot_loc": [6, 1], "voltage_channel": 26, "meta_ps": []},
+               {"grid_loc": [11, 1], "spot_loc": [10, 1], "voltage_channel": 40, "meta_ps": []},
+               {"grid_loc": [15, 2], "spot_loc": [14, 1], "voltage_channel": 55, "meta_ps": []},
+               {"grid_loc": [5, 3], "spot_loc": [4, 2], "voltage_channel": 15, "meta_ps": []},
+               {"grid_loc": [9, 2], "spot_loc": [8, 2], "voltage_channel": 32, "meta_ps": []},
+               {"grid_loc": [13, 3], "spot_loc": [12, 2], "voltage_channel": 46, "meta_ps": []},
+               {"grid_loc": [7, 4], "spot_loc": [6, 3], "voltage_channel": 25, "meta_ps": []},
+               {"grid_loc": [11, 4], "spot_loc": [10, 3], "voltage_channel": 38, "meta_ps": []},
+               {"grid_loc": [9, 5], "spot_loc": [8, 4], "voltage_channel": 28, "meta_ps": []}],
+    "phis": [{"grid_loc": [2, 1], "spot_loc": [4, 0], "voltage_channel": 4, "meta_ps": [[1, 1], [5, 0]]},
+             {"grid_loc": [4, 0], "spot_loc": [4, 0], "voltage_channel": 13, "meta_ps": [[1, 1], [5, 0]]},
+             {"grid_loc": [6, 1], "spot_loc": [8, 0], "voltage_channel": 20, "meta_ps": [[5, 0], [9, 0]]},
+             {"grid_loc": [8, 0], "spot_loc": [8, 0], "voltage_channel": 27, "meta_ps": [[5, 0], [9, 0]]},
+             {"grid_loc": [10, 1], "spot_loc": [12, 0], "voltage_channel": 37, "meta_ps": [[9, 0], [13, 0]]},
+             {"grid_loc": [12, 0], "spot_loc": [12, 0], "voltage_channel": 44, "meta_ps": [[9, 0], [13, 0]]},
+             {"grid_loc": [16, 1], "spot_loc": [16, 0], "voltage_channel": 56, "meta_ps": [[13, 0], [17, 1]]},
+             {"grid_loc": [4, 2], "spot_loc": [6, 1], "voltage_channel": 16, "meta_ps": [[3, 2], [7, 1]]},
+             {"grid_loc": [8, 2], "spot_loc": [10, 1], "voltage_channel": 35, "meta_ps": [[7, 1], [11, 1]]},
+             {"grid_loc": [12, 2], "spot_loc": [14, 1], "voltage_channel": 47, "meta_ps": [[11, 1], [15, 2]]},
+             {"grid_loc": [14, 2], "spot_loc": [14, 1], "voltage_channel": 51, "meta_ps": [[11, 1], [15, 2]]},
+             {"grid_loc": [6, 3], "spot_loc": [8, 2], "voltage_channel": 21, "meta_ps": [[5, 3], [9, 2]]},
+             {"grid_loc": [8, 4], "spot_loc": [10, 3], "voltage_channel": 24, "meta_ps": [[7, 4], [11, 4]]},
+             {"grid_loc": [10, 4], "spot_loc": [10, 3], "voltage_channel": 34, "meta_ps": [[7, 4], [11, 4]]}]}
+
+
+class Sputnik(ActivePhotonicsImager):
     def __init__(self, interlayer_xy: Tuple[float, float], spot_xy: Tuple[int, int], interspot_xy: Tuple[int, int],
-                 config: Dict, ps_calibration: Dict, window_shape: Tuple[int, int] = (15, 10),
+                 ps_calibration: Dict, window_shape: Tuple[int, int] = (15, 10),
                  backward_shift: float = 0.033, home: Tuple[float, float] = (0, 0), stage_port: str = '/dev/ttyUSB1',
                  laser_port: str = '/dev/ttyUSB0', lmm_port: str = '/dev/ttyUSB2',
                  camera_calibration_filepath: Optional[str] = None, integration_time: int = 20000,
                  plim: Tuple[float, float] = (0.05, 4.25), vmax: float = 6):
-        """A class meant to specifically image 6 x 6 triangular mesh,
-        but with the hope for generalization in the future.
+        """This class is meant to test our first triangular mesh fabricated in AMF.
+        These chips are 6x6, and they contain
 
         Args:
             interlayer_xy:
             spot_xy:
             interspot_xy:
-            config: Configuration file for the circuit
             window_shape:
             backward_shift:
             home:
@@ -56,14 +93,14 @@ class TriangularMeshImager(ActivePhotonicsImager):
             plim:
             vmax:
         """
-        self.network = config['network']
+        self.network = SPUTNIK_CONFIG['network']
         self.thetas = [PhaseShifter(**ps_dict, mesh=self,
                                     calibration=PhaseCalibration(**ps_calibration[tuple(ps_dict['grid_loc'])])
-                                    ) for ps_dict in config['thetas']]
+                                    ) for ps_dict in SPUTNIK_CONFIG['thetas']]
         self.thetas: Dict[Tuple[int, int], PhaseShifter] = {ps.grid_loc: ps for ps in self.thetas}
         self.phis = [PhaseShifter(**ps_dict, mesh=self,
                                   calibration=PhaseCalibration(**ps_calibration[tuple(ps_dict['grid_loc'])])
-                                  ) for ps_dict in config['phis']]
+                                  ) for ps_dict in SPUTNIK_CONFIG['phis']]
         self.phis: Dict[Tuple[int, int], PhaseShifter] = {ps.grid_loc: ps for ps in self.phis}
         self.ps: Dict[Tuple[int, int], PhaseShifter] = {**self.thetas, **self.phis}
         self.interlayer_xy = interlayer_xy
@@ -76,16 +113,16 @@ class TriangularMeshImager(ActivePhotonicsImager):
         self.integration_time = integration_time
         self.backward = False
         self.backward_shift = backward_shift
-        super(TriangularMeshImager, self).__init__(home, stage_port, laser_port, lmm_port, camera_calibration_filepath,
-                                                   integration_time, plim, vmax)
+        super(Sputnik, self).__init__(home, stage_port, laser_port, lmm_port, camera_calibration_filepath,
+                                      integration_time, plim, vmax)
 
         self.reset_control()
-        # self.set_transparent()
         self.camera.start_frame_loop()
         self.go_home()
         self.stage.wait_until_stopped()
         self.power_pipe = Pipe()
         self.ps_pipe = Pipe()
+        self.spot_pipe = Pipe(data=[(i, 0) for i in range(6)])
         time.sleep(0.1)
 
     def to_layer(self, layer: int):
@@ -227,9 +264,10 @@ class TriangularMeshImager(ActivePhotonicsImager):
         return pn.Column(reset_button, bar_button, cross_button, alternating_button, uniform_button, buttons)
 
     def set_unitary(self, u: np.ndarray):
-        thetas, phis, _, phases = reck(np.fliplr(np.flipud(u)))
+        network = triangular(u)
+        thetas, phis, gammas = network.params
         self.set_unitary_phases(np.mod(thetas, 2 * np.pi), np.mod(phis, 2 * np.pi))
-        return phases
+        return gammas
 
     def uhash(self, x: np.ndarray, us: np.ndarray, uc: Optional[np.ndarray] = None):
         targets = []
@@ -244,7 +282,7 @@ class TriangularMeshImager(ActivePhotonicsImager):
                 self.set_unitary(u.conj().T)
                 self.set_input(np.hstack((v, 0)))
                 time.sleep(0.1)
-                target.append(np.abs(self.camera.fractional_right[:4]))
+                target.append(np.abs(self.fractional_right[:4]))
                 pred.append(np.abs(us[i, j] @ v) ** 2)
             targets.append(np.hstack(target))
             preds.append(np.hstack(pred))
@@ -266,7 +304,7 @@ class TriangularMeshImager(ActivePhotonicsImager):
         for i in range(4):
             self.set_input((np.hstack((u.T[i], 0))))
             time.sleep(0.1)
-            vals.append(self.camera.fractional_right[i])
+            vals.append(self.fractional_right[i])
         return np.asarray(vals)
 
     def matvec_comparison(self, u: np.ndarray, v: np.ndarray, wait_time: float = 0.1):
@@ -274,7 +312,7 @@ class TriangularMeshImager(ActivePhotonicsImager):
         self.set_input(np.hstack((v, 0)))
         self.set_unitary(u.conj().T)
         time.sleep(wait_time)
-        res = self.camera.fractional_right[:4]
+        res = self.fractional_right[:4]
         actual = np.abs(u @ v) ** 2
         return res, actual
 
@@ -282,14 +320,14 @@ class TriangularMeshImager(ActivePhotonicsImager):
         self.set_transparent()
         self.to_layer(16)
         iterator = pbar(range(n)) if pbar is not None else range(n)
-        return np.asarray([self.u_fidelity(unitary_group.rvs(4)) for _ in iterator])
+        return np.asarray([self.u_fidelity(random_unitary(4)) for _ in iterator])
 
     def matvec_comparisons(self, n: int = 100, wait_time: float = 0.1, pbar: Optional[Callable] = None):
         self.set_transparent()
         self.to_layer(16)
         iterator = pbar(range(n)) if pbar is not None else range(n)
-        return np.asarray([self.matvec_comparison(unitary_group.rvs(4),
-                                                  random_complex(4), wait_time) for _ in iterator])
+        return np.asarray([self.matvec_comparison(random_unitary(4),
+                                                  random_vector(4), wait_time) for _ in iterator])
 
     def set_unitary_sc(self, u: np.ndarray, show_mesh: bool = False):
         t, p = self.network['theta_mesh'], self.network['phi_mesh']
@@ -463,18 +501,18 @@ class TriangularMeshImager(ActivePhotonicsImager):
             time.sleep(0.1)
             idx = phi[1]
             self.ps[theta].phase = 2 * np.arctan2(
-                np.sqrt(self.camera.fractional_left[idx]), np.sqrt(self.camera.fractional_left[idx + 1])
+                np.sqrt(self.fractional_left[idx]), np.sqrt(self.fractional_left[idx + 1])
             )
             time.sleep(0.1)
             phi_p = 2 * np.arctan2(
-                np.sqrt(self.camera.fractional_right[idx]), np.sqrt(self.camera.fractional_right[idx + 1])
+                np.sqrt(self.fractional_right[idx]), np.sqrt(self.fractional_right[idx + 1])
             )
             possible_p = (phi_p, 2 * np.pi - phi_p)
             powers = np.zeros(2)
             for i, p in enumerate(possible_p):
                 self.ps[phi].phase = p
                 time.sleep(0.1)
-                powers[i] = self.camera.fractional_right[idx + 1]
+                powers[i] = self.fractional_right[idx + 1]
             null_idx = 0 if powers[0] < powers[1] else 1
             self.ps[phi].phase = possible_p[null_idx]
 
@@ -591,10 +629,44 @@ class TriangularMeshImager(ActivePhotonicsImager):
         self.calibrate_thetas(pbar)
         self.calibrate_phis(pbar)
 
+    def power_panel(self):
+        def power_bars(data):
+            return hv.Bars(data, hv.Dimension('Port'), 'Fractional power').opts(ylim=(0, 1))
+        dmap = hv.DynamicMap(power_bars, streams=[self.power_pipe]).opts(shared_axes=False)
+        power_toggle = pn.widgets.Toggle(name='Power', value=False)
+        lr_toggle = pn.widgets.Toggle(name='Left Spots', value=False)
+
+        @gen.coroutine
+        def update_plot():
+            self.power_pipe.send([(i, p) for i, p in enumerate(self.fractional_left
+                                                               if lr_toggle.value else self.fractional_right)])
+        cb = PeriodicCallback(update_plot, 100)
+
+        def change_power(*events):
+            for event in events:
+                if event.name == 'value':
+                    self.power_det_on = bool(event.new)
+                    if self.power_det_on:
+                        cb.start()
+                    else:
+                        cb.stop()
+
+        power_toggle.param.watch(change_power, 'value')
+
+        return pn.Column(dmap, power_toggle, lr_toggle)
+
+    @property
+    def fractional_right(self):
+        return self.camera.spot_powers[::3] / np.sum(self.camera.spot_powers[::3])
+
+    @property
+    def fractional_left(self):
+        return self.camera.spot_powers[2::3] / np.sum(self.camera.spot_powers[2::3])
+
 
 class PhaseShifter:
     def __init__(self, grid_loc: Tuple[int, int], spot_loc: Tuple[int, int],
-                 voltage_channel: int, mesh: TriangularMeshImager,
+                 voltage_channel: int, mesh: Sputnik,
                  meta_ps: Optional[Tuple[Tuple[int, int], Tuple[int, int]]] = None,
                  calibration: Optional[PhaseCalibration] = None):
         self.grid_loc = tuple(grid_loc)

@@ -1,7 +1,6 @@
 import numpy as np
 from .typing import Arraylike
 from neurophox.components import SMMZI
-import hashlib
 
 
 def minmax_scale(img: np.ndarray):
@@ -52,39 +51,3 @@ def phases_to_vector(thetas: Arraylike, phis: Arraylike, lower_theta: Arraylike,
         v = v @ SMMZI(theta, phi, hadamard=False, lower_theta=lower_theta[i],
                       lower_phi=lower_phi[i]).givens_rotation(n + 1, i)
     return v.conj()
-
-
-def psk_hash(input_str):
-    hasher1 = hashlib.sha3_256()
-    hasher1.update(input_str)
-
-    x = []
-    for k in range(64):
-        x.append(0)
-    for i in range(0, 64, 2):
-        j = i >> 1
-        x[i] = hasher1.digest()[j] >> 4
-        x[i + 1] = hasher1.digest()[j] & 0x0F
-
-    return x, np.asarray(x) / 16 * 2 * np.pi
-
-
-def pow_hash_matmul(M, input):
-    hasher1 = hashlib.sha3_256()
-    hasher1.update(input)
-
-    x = []
-    for k in range(64):
-        x.append(0)
-    for i in range(0, 64, 2):
-        j = i >> 1
-        x[i] = hasher1.digest()[j] >> 4
-        x[i + 1] = hasher1.digest()[j] & 0x0F
-
-    y = []
-    for i in range(len(x)):
-        y.append(0)
-        for j in range(len(x)):
-            y[i] += M[i][j] * x[j]
-        y[i] = y[i] >> 10
-    return x, y

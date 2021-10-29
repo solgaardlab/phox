@@ -1,6 +1,6 @@
 from ..typing import Callable
 from .viz import Dataset, add_bias, light_rdbu, dark_bwr
-from ..experiment import TriangularMeshImager
+from ..experiment import Sputnik
 
 import numpy as np
 from tensorflow.keras import Model
@@ -27,7 +27,7 @@ class ONN2D:
         self.y_onn = [] if y_onn is None else y_onn
         self.y_onn_test = [] if y_onn_test is None else y_onn_test
 
-    def self_configure(self, mesh: TriangularMeshImager, model, pbar: Callable):
+    def self_configure(self, mesh: Sputnik, model, pbar: Callable):
         thetas = []
         phis = []
 
@@ -40,7 +40,7 @@ class ONN2D:
         self.thetas = thetas
         self.phis = phis
 
-    def onn(self, input_vector: np.ndarray, mesh: TriangularMeshImager,
+    def onn(self, input_vector: np.ndarray, mesh: Sputnik,
             meas_delay: float = 1, factor: float = 3):
         outputs = input_vector
         for ts, ps in zip(self.thetas, self.phis):
