@@ -11,6 +11,7 @@ from holoviews.streams import Pipe
 import panel as pn
 
 from scipy.special import beta as beta_func
+from simphox.utils import random_vector
 
 
 def beta_pdf(x, a, b):
@@ -74,7 +75,7 @@ class Mesh(Device):
         self.theta_pipe = Pipe()
         self.phi_pipe = Pipe()
         self.path_array, self.theta_array, self.phi_array, self.path_idx = self._polys()
-        self._v = np.ones(self.n, dtype=np.complex128) / np.sqrt(self.n)
+        self._v = self.mesh.matrix().conj()[-1]
         self.orig_thetas = self.mesh.thetas.copy()
         self.orig_phis = self.mesh.phis.copy()
 
@@ -145,11 +146,11 @@ class Mesh(Device):
         theta_polys = lambda data: hv.Polygons(
             [{('x', 'y'): poly, 'theta': z} for poly, z in zip(theta_geoms, data)], vdims='theta'
         )
-        theta_bg = hv.Polygons([np.asarray(p.buffer(3).exterior.coords.xy).T for p in self.theta_array]).opts(color='darkgreen')
+        theta_bg = hv.Polygons([np.asarray(p.buffer(3).exterior.coords.xy).T for p in self.theta_array]).opts(color='darkblue')
         phi_polys = lambda data: hv.Polygons(
             [{('x', 'y'): poly, 'phi': z} for poly, z in zip(phi_geoms, data)], vdims='phi'
         )
-        phi_bg = hv.Polygons([np.asarray(p.buffer(3).exterior.coords.xy).T for p in self.phi_array]).opts(color='darkblue')
+        phi_bg = hv.Polygons([np.asarray(p.buffer(3).exterior.coords.xy).T for p in self.phi_array]).opts(color='darkgreen')
 
         powers = hv.DynamicMap(power_polys, streams=[self.power_pipe]).opts(
             data_aspect=1, frame_height=height, ylim=(-10, self.size[1] + 10), line_color='none', cmap=power_cmap,
@@ -194,6 +195,8 @@ class Mesh(Device):
 
         reset_button = pn.widgets.Button(name='Reset phases')
         reset_button.on_click(lambda *events: self.reset_phases())
+        randomize_button = pn.widgets.Button(name='Randomize mesh')
+        randomize_button.on_click(lambda *events: self.randomize())
 
         plot = theta_bg * theta * theta_text * phi_bg * phi * phi_text * waveguides * powers.options(
             colorbar=True, clim=(0, 1), title=title, tools=['hover', 'tap'])
@@ -226,9 +229,10 @@ class Mesh(Device):
                                                                                    height=200)
 
         if wide:
-            return pn.Column(plot, pn.Row(pn.Column(theta_set, theta_plot), pn.Column(phi_set, phi_plot), reset_button))
+            return pn.Column(plot, pn.Row(pn.Column(theta_set, theta_plot), pn.Column(phi_set, phi_plot),
+                                          pn.Column(reset_button, randomize_button)))
         else:
-            return pn.Row(plot, pn.Column(theta_plot, theta_set, phi_plot, phi_set, reset_button))
+            return pn.Row(plot, pn.Column(theta_plot, theta_set, phi_plot, phi_set, reset_button, randomize_button))
 
     def reset_phases(self):
         self.mesh.thetas = self.orig_thetas.copy()
@@ -236,6 +240,15 @@ class Mesh(Device):
         self.theta_pipe.send(self.mesh.thetas)
         self.phi_pipe.send(self.mesh.phis)
         self._propagate()
+
+    def randomize(self):
+        self.mesh.thetas = self.mesh.rand_theta()
+        self.mesh.phis = np.random.rand(self.mesh.num_nodes) * 2 * np.pi
+        self.orig_thetas = self.mesh.thetas.copy()
+        self.orig_phis = self.mesh.phis.copy()
+        self.theta_pipe.send(self.mesh.thetas)
+        self.phi_pipe.send(self.mesh.phis)
+        self.v = self.mesh.matrix().conj()[-1]
 
     @property
     def v(self):
