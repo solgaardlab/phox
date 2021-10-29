@@ -7,8 +7,8 @@ import panel as pn
 if __name__ == '__main__':
     hv.extension('bokeh')
     u = random_unitary(8)
-    mesh = Mesh(vector_unit(u))
-
+    mesh = Mesh(vector_unit(u)[0])
+    mesh.v = u.T[-1]
     app = mesh.hvsim(height=200, wide=True)
 
     pn.serve(app, start=True, show=False, port=5006,
