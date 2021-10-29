@@ -3,6 +3,7 @@ from simphox.circuit import vector_unit
 from phox.model.mesh import Mesh
 import holoviews as hv
 import panel as pn
+import sys
 
 if __name__ == '__main__':
     hv.extension('bokeh')
@@ -11,7 +12,4 @@ if __name__ == '__main__':
     mesh.v = u.T[-1]
     app = mesh.hvsim(height=200, wide=True)
 
-    pn.serve(app, start=True, show=False, port=5006,
-        websocket_origin="localhost:4444",
-        ssl_certfile='/home/exx/ssl/jupyter_cert.pem',
-        ssl_keyfile='/home/exx/ssl/jupyter_cert.key')
+    pn.serve(app, start=True, show=True, port=int(sys.argv[-1]), websocket_origin='phoxmesh.herokuapp.com')
