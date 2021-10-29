@@ -153,7 +153,7 @@ class XCamera:
         self.set_integration_time(integration_time)
         self.integration_time = integration_time * 1e-6
         self.livestream_pipe = Pipe(data=[])
-        self.power_pipe = Pipe(data=[])
+        self.power_pipe = Pipe(data=[(i, 0) for i in range(6)])
         self.spots = [] if spots is None else spots
         self.spot_powers = []
         self.livestream_on = False
@@ -292,7 +292,6 @@ class XCamera:
         def update_plot():
             self.power_pipe.send([(i, p) for i, p in enumerate(self.fractional_left
                                                                if lr_toggle.value else self.fractional_right)])
-
         cb = PeriodicCallback(update_plot, 100)
 
         def change_power(*events):

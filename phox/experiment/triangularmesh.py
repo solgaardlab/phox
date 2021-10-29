@@ -5,7 +5,7 @@ from holoviews.streams import Pipe
 
 from .activephotonicsimager import ActivePhotonicsImager, _get_grating_spot
 from ..instrumentation import XCamera
-from dphox.component.active import Mesh
+from dphox.active import LocalMesh
 from dphox.demo import mzi
 
 import time
@@ -27,7 +27,7 @@ from ..model.phase import PhaseCalibration
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-mesh = Mesh(mzi, 6)
+mesh = LocalMesh(mzi, 6)
 PS_LAYER = 'm1am'
 
 class TriangularMeshImager(ActivePhotonicsImager):
@@ -315,9 +315,9 @@ class TriangularMeshImager(ActivePhotonicsImager):
                                              ylim=(-10, 70), xlim=(0, mesh.size[0]),
                                              color='black', line_width=2)
         phase_shift_polys = [np.asarray(p.buffer(1).exterior.coords.xy).T
-                             for p in mesh.phase_shifter_array(PS_LAYER)[::3]]
+                             for p in mesh.phase_shifter_array('heater')]
         labels = np.fliplr(np.fliplr(np.mgrid[0:6, 0:19]).reshape((2, -1)).T)
-        centroids = [(poly.centroid.x, poly.centroid.y) for poly in mesh.phase_shifter_array(PS_LAYER)[::3]]
+        centroids = [(poly.centroid.x, poly.centroid.y) for poly in mesh.phase_shifter_array('heater')]
 
         text = hv.Overlay([hv.Text(centroid[0],
                                    centroid[1] + mesh.interport_distance / 2,
