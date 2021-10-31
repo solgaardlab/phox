@@ -54,12 +54,12 @@ if __name__ == '__main__':
         return mesh.hvsim(height=200, wide=True, title='N=4, Rectangular mesh', self_configure_matrix=False)
 
     pn.serve({
-        'MZI N=2': mzi,
-        'Balanced Tree N=4': bt4,
-        'Balanced Tree N=8': bt8,
-        'Balanced Tree N=16': bt16,
-        'Unbalanced Tree N=8': ut8,
-        'Tree cascade N=4': btc4,
-        'Tree cascade N=8': btc8,
-        'Triangular N=4': tri4
+        'MZI2': mzi,
+        'BalancedTree4': bt4,
+        'BalancedTree8': bt8,
+        'BalancedTree16': bt16,
+        'UnbalancedTree8': ut8,
+        'TreeCascade4': btc4,
+        'TreeCascade8': btc8,
+        'Triangular4': tri4
     }, start=True, show=True, port=int(sys.argv[-1]), websocket_origin='phoxmesh.herokuapp.com')
