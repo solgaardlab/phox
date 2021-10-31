@@ -1,3 +1,5 @@
+import time
+
 import numpy as np
 
 from dphox import Device, MZI, DC, Waveguide, Via, CommonLayer
@@ -23,8 +25,8 @@ def beta_phase(theta, a, b):
     return np.abs(beta_pdf(x, a, b) * np.sin(theta / 2) * np.cos(theta / 2) / np.pi)
 
 
-ps = ThermalPS(Waveguide((2, 20)), ps_w=10, via=Via((0.4, 0.4), 0.1))
-dc = DC(waveguide_w=2, interaction_l=10, bend_l=5, interport_distance=25, gap_w=0.5)
+ps = ThermalPS(Waveguide((0.5, 5)), ps_w=2.5, via=Via((0.4, 0.4), 0.1))
+dc = DC(waveguide_w=0.5, interaction_l=2.5, bend_l=1.25, interport_distance=6, gap_w=0.125)
 
 
 @fix_dataclass_init_docs
@@ -74,10 +76,51 @@ class Mesh(Device):
         self.power_pipe = Pipe()
         self.theta_pipe = Pipe()
         self.phi_pipe = Pipe()
+        self.input_pipe = Pipe()
+        self.output_pipe = Pipe()
+        self.status_pipe = Pipe()
+        self.orig_matrix_pipe = Pipe()
+        self.curr_matrix_pipe = Pipe()
+        self.fidelity_matrix_pipe = Pipe()
+        self.status_pipe.send('Idle')
         self.path_array, self.theta_array, self.phi_array, self.path_idx = self._polys()
-        self._v = self.mesh.matrix().conj()[-1]
         self.orig_thetas = self.mesh.thetas.copy()
         self.orig_phis = self.mesh.phis.copy()
+        self.orig_matrix = self.mesh.matrix()
+        self.orig_matrix_pipe.send(self.orig_matrix)
+        self._v = self.orig_matrix.conj()[-1]
+        self.curr_theta_idx = np.argmax(self.mesh.beta)
+        self.curr_phi_idx = np.argmax(self.mesh.beta)
+
+    @property
+    def v(self):
+        return self._v
+
+    @v.setter
+    def v(self, v: np.ndarray):
+        if not self._v.ndim == 1:
+            raise AttributeError('Require number of dimensions 1 (1-dimensional vector) to show propagation.')
+        self._v = v
+        self.update()
+
+    def update(self):
+        """Based on the current values in the mesh, update all plots accordingly.
+
+        """
+        v = self._v / np.linalg.norm(self._v)
+        propagated_magnitudes = self.mesh.propagate(v)
+        input_powers = np.abs(propagated_magnitudes[1])
+        output_powers = np.abs(propagated_magnitudes[-1])
+        powers = np.abs(propagated_magnitudes[1:, :].flatten()[self.path_idx])
+        poly_powers = [powers[i] for i, multipoly in enumerate(self.path_array) for _ in multipoly]
+        self.phi_pipe.send(self.mesh.phis)
+        self.theta_pipe.send(self.mesh.thetas)
+        self.power_pipe.send(poly_powers)
+        self.input_pipe.send(input_powers)
+        self.output_pipe.send(output_powers)
+        curr_matrix = self.mesh.matrix()
+        self.curr_matrix_pipe.send(self.mesh.matrix())
+        self.fidelity_matrix_pipe.send(curr_matrix.conj() @ self.orig_matrix.T)
 
     def _polys(self):
         """Path array, which is useful for plotting and demo purposes.
@@ -121,15 +164,60 @@ class Mesh(Device):
         # index to where there are waveguides that map to each polygon
         return x[x != None], theta_array, phi_array, np.where(x != None)
 
-    def hvsim(self, title='Mesh', height: int = 700, wide: bool = False,
-              power_cmap: str = 'hot', theta_cmap='twilight', phi_cmap='twilight'):
+    def _io_plot(self, power_cmap: str):
+        input_x = [self.port[f'a{i}'].x - self.interport_distance / 4 for i in range(self.n)]
+        input_y = [self.port[f'a{i}'].y for i in range(self.n)]
+        output_x = [self.port[f'b{i}'].x + self.interport_distance / 4 for i in range(self.n)]
+        output_y = [self.port[f'b{i}'].y for i in range(self.n)]
+
+        input_arrows = lambda data: hv.VectorField(
+            (input_x, input_y, np.zeros_like(input_x), data)).opts(
+            pivot='tip', line_width=4,
+            magnitude=hv.dim('Magnitude') * self.interport_distance, rescale_lengths=False) * hv.VectorField(
+            (input_x, input_y, np.zeros_like(input_x), data)).opts(
+            pivot='tip', color='Magnitude', cmap=power_cmap, line_width=2,
+            magnitude=hv.dim('Magnitude') * self.interport_distance, rescale_lengths=False, clim=(0, 1))
+        output_arrows = lambda data: hv.VectorField(
+            (output_x, output_y, np.zeros_like(output_x), data)).opts(
+            pivot='tail', magnitude=hv.dim('Magnitude') * self.interport_distance, rescale_lengths=False,
+            line_width=4) * hv.VectorField(
+            (output_x, output_y, np.zeros_like(output_x), data)).opts(
+            pivot='tail', color='Magnitude', magnitude=hv.dim('Magnitude') * self.interport_distance,
+            rescale_lengths=False, cmap=power_cmap, line_width=2, clim=(0, 1))
+
+        inputs = hv.DynamicMap(input_arrows, streams=[self.input_pipe])
+        outputs = hv.DynamicMap(output_arrows, streams=[self.output_pipe])
+
+        return inputs, outputs
+
+    def _power_plots(self, height: int, power_cmap: str, title: str):
         polys = [np.asarray(p.exterior.coords.xy).T for multipoly in self.path_array for p in multipoly]
+
+        power_polys = lambda data: hv.Polygons(
+            [{('x', 'y'): poly, 'amplitude': z} for poly, z in zip(polys, data)], vdims='amplitude'
+        )
+
+        status = lambda data: hv.Text(x=self.size[0] / 2, y=self.size[1] + self.interport_distance / 2, text=data)
 
         waveguides = hv.Polygons(polys).opts(data_aspect=1, frame_height=height,
                                              ylim=(-10, self.size[1] + 10),
                                              color='black', line_width=2)
-        theta_geoms = [np.asarray(p.buffer(1).exterior.coords.xy).T for p in self.theta_array]
-        phi_geoms = [np.asarray(p.buffer(1).exterior.coords.xy).T for p in self.phi_array]
+
+        powers = hv.DynamicMap(power_polys, streams=[self.power_pipe]).opts(
+            data_aspect=1, frame_height=height,
+            ylim=(-self.interport_distance, self.size[1] + self.interport_distance),
+            line_color='none', cmap=power_cmap,
+            shared_axes=False, colorbar=True, clim=(0, 1),
+            title=title, tools=['hover'],
+            xlim=(-self.interport_distance * 2,
+                  self.size[0] + self.interport_distance)
+        )
+
+        return waveguides * powers * hv.DynamicMap(status, streams=[self.status_pipe])
+
+    def _phase_plots(self, height: int, theta_cmap: str, phi_cmap: str):
+        theta_geoms = [np.asarray(p.buffer(-0.25).exterior.coords.xy).T for p in self.theta_array]
+        phi_geoms = [np.asarray(p.buffer(-0.25).exterior.coords.xy).T for p in self.phi_array]
         theta_centroids = [(poly.centroid.x, poly.centroid.y) for poly in self.theta_array]
         phi_centroids = [(poly.centroid.x, poly.centroid.y) for poly in self.phi_array]
 
@@ -139,30 +227,22 @@ class Mesh(Device):
         phi_text = hv.Overlay([hv.Text(centroid[0], centroid[1] + self.interport_distance / 2,
                                        f'ϕ{i}', fontsize=7).opts(color='darkgreen') for i, centroid in
                                enumerate(phi_centroids)])
-
-        power_polys = lambda data: hv.Polygons(
-            [{('x', 'y'): poly, 'amplitude': z} for poly, z in zip(polys, data)], vdims='amplitude'
-        )
         theta_polys = lambda data: hv.Polygons(
             [{('x', 'y'): poly, 'theta': z} for poly, z in zip(theta_geoms, data)], vdims='theta'
         )
-        theta_bg = hv.Polygons([np.asarray(p.buffer(3).exterior.coords.xy).T for p in self.theta_array]).opts(color='darkblue')
+        theta_bg = hv.Polygons([np.asarray(p.exterior.coords.xy).T for p in self.theta_array]).opts(color='darkblue')
         phi_polys = lambda data: hv.Polygons(
             [{('x', 'y'): poly, 'phi': z} for poly, z in zip(phi_geoms, data)], vdims='phi'
         )
-        phi_bg = hv.Polygons([np.asarray(p.buffer(3).exterior.coords.xy).T for p in self.phi_array]).opts(color='darkgreen')
+        phi_bg = hv.Polygons([np.asarray(p.exterior.coords.xy).T for p in self.phi_array]).opts(color='darkgreen')
 
-        powers = hv.DynamicMap(power_polys, streams=[self.power_pipe]).opts(
-            data_aspect=1, frame_height=height, ylim=(-10, self.size[1] + 10), line_color='none', cmap=power_cmap,
-            shared_axes=False
-        )
         theta = hv.DynamicMap(theta_polys, streams=[self.theta_pipe]).opts(
-            data_aspect=1, frame_height=height, ylim=(-10, self.size[1] + 10), line_color='none', cmap=theta_cmap,
-            shared_axes=False, clim=(0, 2 * np.pi), tools=['hover']
+            data_aspect=1, frame_height=height, line_color='none', cmap=theta_cmap,
+            shared_axes=False, clim=(0, 2 * np.pi), tools=['hover', 'tap']
         )
         phi = hv.DynamicMap(phi_polys, streams=[self.phi_pipe]).opts(
-            data_aspect=1, frame_height=height, ylim=(-10, self.size[1] + 10), line_color='none', cmap=phi_cmap,
-            shared_axes=False, clim=(0, 2 * np.pi), tools=['hover']
+            data_aspect=1, frame_height=height, line_color='none', cmap=phi_cmap,
+            shared_axes=False, clim=(0, 2 * np.pi), tools=['hover', 'tap']
         )
 
         sel_theta = hv.streams.Selection1D(source=theta)
@@ -171,53 +251,47 @@ class Mesh(Device):
         def change_theta(*events):
             for event in events:
                 if event.name == 'value':
-                    self.mesh.thetas[sel_theta.index] = event.new * np.pi
+                    index = sel_theta.index[0] if len(sel_theta.index) > 0 else self.curr_theta_idx
+                    self.mesh.thetas[index] = event.new * np.pi
                     self.theta_pipe.send(self.mesh.thetas)
-                    self._propagate()
+                    self.update()
 
         def change_phi(*events):
             for event in events:
                 if event.name == 'value':
-                    self.mesh.phis[sel_phi.index] = event.new * np.pi
+                    index = sel_phi.index[0] if len(sel_phi.index) > 0 else self.curr_phi_idx
+                    self.mesh.phis[index] = event.new * np.pi
                     self.phi_pipe.send(self.mesh.phis)
-                    self._propagate()
+                    self.update()
 
         theta_set = pn.widgets.FloatSlider(start=0, end=2, step=0.01,
                                            value=0, name='θ / π', format='1[.]000')
         theta_set.param.watch(change_theta, 'value')
+        theta_set.value = self.mesh.thetas[0] / np.pi
         phi_set = pn.widgets.FloatSlider(start=0, end=2, step=0.01,
                                          value=0, name='ϕ / π', format='1[.]000')
         phi_set.param.watch(change_phi, 'value')
-
-        self._propagate()
-        self.theta_pipe.send(self.mesh.thetas)
-        self.phi_pipe.send(self.mesh.phis)
-
-        reset_button = pn.widgets.Button(name='Reset phases')
-        reset_button.on_click(lambda *events: self.reset_phases())
-        randomize_button = pn.widgets.Button(name='Randomize mesh')
-        randomize_button.on_click(lambda *events: self.randomize())
-
-        plot = theta_bg * theta * theta_text * phi_bg * phi * phi_text * waveguides * powers.options(
-            colorbar=True, clim=(0, 1), title=title, tools=['hover', 'tap'])
+        phi_set.value = self.mesh.phis[0] / np.pi
 
         def pi_formatter(value):
             return f'{value:.1f}π'
 
         def theta_plot_(index, data):
-            index = index[0] if len(index) > 0 else np.argmax(self.mesh.beta)
+            index = index[0] if len(index) > 0 else self.curr_theta_idx
             x = np.linspace(0, 2 * np.pi, 1000)
             a, b = self.mesh.nodes[index].alpha, self.mesh.nodes[index].beta
             curve = hv.Curve((x / np.pi, beta_phase(x, a, b)))
             theta_set.value = data[index] / np.pi
+            self.curr_theta_idx = index
             return hv.Spikes([data[index] / np.pi], label=f'θ{index}').opts(
                 color='black', spike_length=beta_phase(data[index], a, b)) * curve.relabel(f'B({a},{b})')
 
         def phi_plot_(index, data):
-            index = index[0] if len(index) > 0 else 0
+            index = index[0] if len(index) > 0 else self.curr_phi_idx
             x = np.linspace(0, 2 * np.pi, 1000)
             curve = hv.Curve((x / np.pi, np.ones_like(x) / 2 * np.pi))
             phi_set.value = data[index] / np.pi
+            self.curr_phi_idx = index
             return hv.Spikes([data[index] / np.pi], label=f'ϕ{index}').opts(
                 color='black', spike_length=1 / 2 * np.pi) * curve.relabel(f'U(2π)')
 
@@ -228,41 +302,124 @@ class Mesh(Device):
                                                                                    xformatter=pi_formatter,
                                                                                    height=200)
 
+        return theta_bg * theta_text * theta, phi_bg * phi_text * phi, theta_set, phi_set, theta_plot, phi_plot
+
+    def _matrix_plots(self):
+
+        def complex_matrix(data):
+            return hv.VectorField((*np.meshgrid(np.arange(self.n), np.arange(self.n)),
+                                   np.angle(data), np.abs(data))).opts(magnitude=hv.dim('Magnitude') * 0.5)
+
+        orig_matrix = hv.DynamicMap(complex_matrix, streams=[self.orig_matrix_pipe]).opts(title='Unitary comparison',
+                                                                                          rescale_lengths=False,
+                                                                                          xticks=np.arange(self.n),
+                                                                                          yticks=np.arange(self.n),
+                                                                                          invert_yaxis=True)
+        curr_matrix = hv.DynamicMap(complex_matrix, streams=[self.curr_matrix_pipe]).opts(rescale_lengths=False,
+                                                                                          xticks=np.arange(self.n),
+                                                                                          yticks=np.arange(self.n),
+                                                                                          color='red',
+                                                                                          invert_yaxis=True)
+
+        product = hv.DynamicMap(complex_matrix, streams=[self.fidelity_matrix_pipe]).opts(title='Fidelity unitary',
+                                                                                          shared_axes=False,
+                                                                                          rescale_lengths=False,
+                                                                                          xticks=np.arange(self.n),
+                                                                                          yticks=np.arange(self.n),
+                                                                                          invert_yaxis=True
+                                                                                          )
+        return (curr_matrix * orig_matrix).opts(shared_axes=False, show_legend=True), product
+
+    def hvsim(self, title='Mesh', height: int = 700, wide: bool = False,
+              power_cmap: str = 'gray', theta_cmap='twilight', phi_cmap='twilight',
+              self_configure_matrix: bool = True):
+        powers = self._power_plots(height, power_cmap, title)
+        inputs, outputs = self._io_plot(power_cmap)
+        theta, phi, theta_set, phi_set, theta_plot, phi_plot = self._phase_plots(height, theta_cmap, phi_cmap)
+        self.update()
+        reset_button = pn.widgets.Button(name='Reset phases')
+        reset_button.on_click(lambda *events: self.reset_phases())
+        randomize_button = pn.widgets.Button(name='Randomize mesh')
+        randomize_button.on_click(lambda *events: self.randomize())
+        program_columns = pn.widgets.Button(name='Configure vector')
+        program_columns.on_click(lambda *events: self.program_columns())
+        if self_configure_matrix:
+            self_configure_unitary = pn.widgets.Button(name='Configure full unitary')
+            self_configure_unitary.on_click(lambda *events: self.self_configure_unitary())
+            program_columns = pn.Column(program_columns, self_configure_unitary)
+        plot = theta * phi * inputs * outputs * powers
+        plot.opts(invert_yaxis=True)
+        matrix = self._matrix_plots()
+        phases = pn.Column(theta_set, theta_plot), pn.Column(phi_set, phi_plot)
         if wide:
-            return pn.Column(plot, pn.Row(pn.Column(theta_set, theta_plot), pn.Column(phi_set, phi_plot),
-                                          pn.Column(reset_button, randomize_button)))
+            return pn.Column(plot,
+                             pn.Row(pn.Tabs(('Phases', pn.Row(*phases)), ('Matrix', pn.Row(*matrix))),
+                                    pn.Column(reset_button, randomize_button, program_columns)))
         else:
-            return pn.Row(plot, pn.Column(theta_plot, theta_set, phi_plot, phi_set, reset_button, randomize_button))
+            return pn.Row(plot, pn.Column(pn.Tabs(('Phases', pn.Column(*phases)), ('Matrix', pn.Column(*matrix))),
+                                          reset_button, randomize_button, program_columns))
 
     def reset_phases(self):
         self.mesh.thetas = self.orig_thetas.copy()
         self.mesh.phis = self.orig_phis.copy()
-        self.theta_pipe.send(self.mesh.thetas)
-        self.phi_pipe.send(self.mesh.phis)
-        self._propagate()
+        self.update()
 
     def randomize(self):
+        """Randomize the phases in this mesh and set the programmed vector to maximize the bottom output.
+
+        Returns:
+
+        """
+        self.status_pipe.send('Haar-randomizing phases...')
         self.mesh.thetas = self.mesh.rand_theta()
         self.mesh.phis = np.random.rand(self.mesh.num_nodes) * 2 * np.pi
         self.orig_thetas = self.mesh.thetas.copy()
         self.orig_phis = self.mesh.phis.copy()
-        self.theta_pipe.send(self.mesh.thetas)
-        self.phi_pipe.send(self.mesh.phis)
-        self.v = self.mesh.matrix().conj()[-1]
+        self.orig_matrix = self.mesh.matrix()
+        self.orig_matrix_pipe.send(self.orig_matrix)
+        self.status_pipe.send('Propagating ideal vector v...')
+        self.v = self.orig_matrix.conj()[-1]
+        self.status_pipe.send('Idle')
 
-    @property
-    def v(self):
-        return self._v
+    def program_columns(self):
+        """For a self configurable architecture, configure the currently propagated vector.
+        """
+        self.status_pipe.send('Haar-randomizing phases...')
+        self.mesh.thetas = self.mesh.rand_theta()
+        self.mesh.phis = np.random.rand(self.mesh.num_nodes) * 2 * np.pi
+        self.update()
+        for column in self.mesh.columns:
+            self.status_pipe.send(f'Tune ϕ in col {column.nodes[0].column} for v.')
+            self.mesh.phis[(column.node_idxs,)] = self.orig_phis[(column.node_idxs,)]
+            self.update()
+            if self.n == 2:
+                # hack for demo purposes
+                time.sleep(1)
+            self.status_pipe.send(f'Tune θ in col {column.nodes[0].column} for v.')
+            self.mesh.thetas[(column.node_idxs,)] = self.orig_thetas[(column.node_idxs,)]
+            self.update()
+        self.status_pipe.send('Idle')
 
-    @v.setter
-    def v(self, v: np.ndarray):
-        if not self._v.ndim == 1:
-            raise AttributeError('Require number of dimensions 1 (1-dimensional vector) to show propagation.')
-        self._v = v
-        self._propagate()
-
-    def _propagate(self):
-        v = self._v / np.linalg.norm(self._v)
-        powers = np.abs(self.mesh.propagate(v)[1:, :].flatten()[self.path_idx])
-        poly_powers = [powers[i] for i, multipoly in enumerate(self.path_array) for _ in multipoly]
-        self.power_pipe.send(poly_powers)
+    def self_configure_unitary(self):
+        """For a self configurable architecture, configure each of the rows of the matrix stored in the desired mesh.
+        """
+        self.status_pipe.send(f'Haar-randomizing phases...')
+        self.mesh.thetas = self.mesh.rand_theta()
+        self.mesh.phis = np.random.rand(self.mesh.num_nodes) * 2 * np.pi
+        self.update()
+        offset = 0
+        for i in reversed(range(self.n)):
+            self.status_pipe.send(f'Sending input {i}.')
+            self.v = self.orig_matrix[i].conj()
+            node_idxs = self.mesh.node_idxs[offset:offset + i]
+            offset += i
+            mesh = ForwardMesh([self.mesh.nodes[idx] for idx in node_idxs])
+            for column in mesh.columns:
+                if len(column.node_idxs) > 0 or i == 0:
+                    self.status_pipe.send(f'Tune ϕ in col {column.nodes[0].column} for u{i}.')
+                    self.mesh.phis[(column.node_idxs,)] = self.orig_phis[(column.node_idxs,)]
+                    self.update()
+                    self.status_pipe.send(f'Tune θ in col {column.nodes[0].column} for u{i}.')
+                    self.mesh.thetas[(column.node_idxs,)] = self.orig_thetas[(column.node_idxs,)]
+                    self.update()
+        self.status_pipe.send('Idle')
