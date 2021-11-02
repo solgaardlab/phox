@@ -11,7 +11,7 @@ setup(
         'numpy>=1.19',
         'scipy>=1.7.1',
         'dphox>=0.0.1a4',
-        'simphox>=0.0.1a5',
+        'simphox>=0.0.1a6',
         'holoviews'
     ],
 )
