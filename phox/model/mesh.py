@@ -1,4 +1,5 @@
 import time
+from typing import Optional, Callable
 
 import numpy as np
 
@@ -13,7 +14,7 @@ from holoviews.streams import Pipe
 import panel as pn
 
 from scipy.special import beta as beta_func
-from simphox.utils import random_vector
+from simphox.utils import random_vector, random_unitary
 
 
 def beta_pdf(x, a, b):
@@ -29,8 +30,12 @@ ps = ThermalPS(Waveguide((0.5, 5)), ps_w=2.5, via=Via((0.4, 0.4), 0.1))
 dc = DC(waveguide_w=0.5, interaction_l=2.5, bend_l=1.25, interport_distance=6, gap_w=0.125)
 
 
+class MeshConfig:
+    arbitrary_types_allowed = True
+
+
 @fix_dataclass_init_docs
-@dataclass
+@dataclass(config=MeshConfig)
 class Mesh(Device):
     """Default rectangular mesh, or triangular mesh if specified
     Note: triangular meshes can self-configure, but rectangular meshes cannot.
@@ -42,18 +47,21 @@ class Mesh(Device):
         name: Name of the device
     """
 
-    mesh: ForwardMesh
+    mesh_fn: Callable[[np.ndarray, ...], ForwardMesh]
+    orig_matrix: Optional[np.ndarray] = None
     dc: DC = dc
     ps: ThermalPS = ps
     ridge: str = CommonLayer.RIDGE_SI
     name: str = 'mesh'
 
     def __post_init_post_parse__(self):
+        self.mesh = self.mesh_fn(self.orig_matrix)
         self.interport_distance = self.dc.interport_distance
         port = {}
         self.n = self.mesh.n
         pattern_to_layer = []
         self.mzis = {}
+        self.column_width = 0
         for column in self.mesh.columns:
             for node in column.nodes:
                 dc_dict = asdict(self.dc)
@@ -64,6 +72,7 @@ class Mesh(Device):
                 mzi.translate(node.column * mzi.size[0], node.top * self.interport_distance)
                 self.mzis[(node.column, node.top, node.bottom)] = mzi.copy
                 pattern_to_layer.extend(mzi.pattern_to_layer)
+                self.column_width = mzi.size[0]
                 if f'a{node.bottom}' not in port:
                     port[f'a{node.bottom}'] = mzi.port['a1']
                 if f'a{node.top}' not in port:
@@ -86,7 +95,6 @@ class Mesh(Device):
         self.path_array, self.theta_array, self.phi_array, self.path_idx = self._polys()
         self.orig_thetas = self.mesh.thetas.copy()
         self.orig_phis = self.mesh.phis.copy()
-        self.orig_matrix = self.mesh.matrix()
         self.orig_matrix_pipe.send(self.orig_matrix)
         self._v = self.orig_matrix.conj()[-1]
         self.curr_theta_idx = np.argmax(self.mesh.beta)
@@ -189,6 +197,10 @@ class Mesh(Device):
         outputs = hv.DynamicMap(output_arrows, streams=[self.output_pipe])
 
         return inputs, outputs
+
+    def add_random_error(self, error_std: float = 0.01):
+        self.mesh = self.mesh.add_error_variance(error_std)
+        self.update()
 
     def _power_plots(self, height: int, power_cmap: str, title: str):
         polys = [np.asarray(p.exterior.coords.xy).T for multipoly in self.path_array for p in multipoly]
@@ -310,25 +322,41 @@ class Mesh(Device):
             return hv.VectorField((*np.meshgrid(np.arange(self.n), np.arange(self.n)),
                                    np.angle(data), np.abs(data))).opts(magnitude=hv.dim('Magnitude') * 0.5)
 
-        orig_matrix = hv.DynamicMap(complex_matrix, streams=[self.orig_matrix_pipe]).opts(title='Unitary comparison',
+        status_ = lambda data: hv.Text(x=self.n / 2 - 0.5, y=self.n - 0.5, text=data)
+        status = hv.DynamicMap(status_, streams=[self.status_pipe])
+
+        orig_matrix = hv.DynamicMap(complex_matrix, streams=[self.orig_matrix_pipe], label='ideal').opts(title='Unitary comparison',
                                                                                           rescale_lengths=False,
                                                                                           xticks=np.arange(self.n),
                                                                                           yticks=np.arange(self.n),
-                                                                                          invert_yaxis=True)
-        curr_matrix = hv.DynamicMap(complex_matrix, streams=[self.curr_matrix_pipe]).opts(rescale_lengths=False,
+                                                                                          invert_yaxis=True,
+                                                                                          xlim=(-1, self.n),
+                                                                                          ylim=(-1, self.n),
+                                                                                          xlabel='Column',
+                                                                                          ylabel='Row'
+                                                                                          )
+        curr_matrix = hv.DynamicMap(complex_matrix, streams=[self.curr_matrix_pipe], label='actual').opts(rescale_lengths=False,
                                                                                           xticks=np.arange(self.n),
                                                                                           yticks=np.arange(self.n),
                                                                                           color='red',
-                                                                                          invert_yaxis=True)
+                                                                                          invert_yaxis=True,
+                                                                                          xlim=(-1, self.n),
+                                                                                          ylim=(-1, self.n),
+                                                                                          xlabel='Column',
+                                                                                          ylabel='Row'
+                                                                                          )
 
         product = hv.DynamicMap(complex_matrix, streams=[self.fidelity_matrix_pipe]).opts(title='Fidelity unitary',
-                                                                                          shared_axes=False,
                                                                                           rescale_lengths=False,
                                                                                           xticks=np.arange(self.n),
                                                                                           yticks=np.arange(self.n),
-                                                                                          invert_yaxis=True
+                                                                                          invert_yaxis=True,
+                                                                                          xlim=(-1, self.n),
+                                                                                          ylim=(-1, self.n),
+                                                                                          xlabel='Column',
+                                                                                          ylabel='Row'
                                                                                           )
-        return (curr_matrix * orig_matrix).opts(shared_axes=False, show_legend=True), product
+        return (curr_matrix * orig_matrix * status).opts(shared_axes=False), (product * status).opts(shared_axes=False)
 
     def hvsim(self, title='Mesh', height: int = 700, wide: bool = False,
               power_cmap: str = 'gray', theta_cmap='twilight', phi_cmap='twilight',
@@ -344,9 +372,11 @@ class Mesh(Device):
         program_columns = pn.widgets.Button(name='Configure vector')
         program_columns.on_click(lambda *events: self.program_columns())
         if self_configure_matrix:
-            self_configure_unitary = pn.widgets.Button(name='Configure full unitary')
-            self_configure_unitary.on_click(lambda *events: self.self_configure_unitary())
-            program_columns = pn.Column(program_columns, self_configure_unitary)
+            self_configure_unitary = pn.widgets.Button(name='Configure unitary by column')
+            self_configure_unitary.on_click(lambda *events: self.self_configure_unitary(by_column=True))
+            self_configure_unitary_fast = pn.widgets.Button(name='Configure unitary by vector unit')
+            self_configure_unitary_fast.on_click(lambda *events: self.self_configure_unitary(by_column=False))
+            program_columns = pn.Column(program_columns, self_configure_unitary, self_configure_unitary_fast)
         plot = theta * phi * inputs * outputs * powers
         plot.opts(invert_yaxis=True)
         matrix = self._matrix_plots()
@@ -371,11 +401,12 @@ class Mesh(Device):
 
         """
         self.status_pipe.send('Haar-randomizing phases...')
-        self.mesh.thetas = self.mesh.rand_theta()
-        self.mesh.phis = np.random.rand(self.mesh.num_nodes) * 2 * np.pi
+        # self.mesh.thetas = self.mesh.rand_theta()
+        # self.mesh.phis = np.random.rand(self.mesh.num_nodes) * 2 * np.pi
+        self.orig_matrix = random_unitary(self.n)
+        self.mesh = self.mesh_fn(self.orig_matrix)
         self.orig_thetas = self.mesh.thetas.copy()
         self.orig_phis = self.mesh.phis.copy()
-        self.orig_matrix = self.mesh.matrix()
         self.orig_matrix_pipe.send(self.orig_matrix)
         self.status_pipe.send('Propagating ideal vector v...')
         self.v = self.orig_matrix.conj()[-1]
@@ -400,7 +431,7 @@ class Mesh(Device):
             self.update()
         self.status_pipe.send('Idle')
 
-    def self_configure_unitary(self):
+    def self_configure_unitary(self, by_column: bool):
         """For a self configurable architecture, configure each of the rows of the matrix stored in the desired mesh.
         """
         self.status_pipe.send(f'Haar-randomizing phases...')
@@ -414,12 +445,18 @@ class Mesh(Device):
             node_idxs = self.mesh.node_idxs[offset:offset + i]
             offset += i
             mesh = ForwardMesh([self.mesh.nodes[idx] for idx in node_idxs])
-            for column in mesh.columns:
-                if len(column.node_idxs) > 0 or i == 0:
-                    self.status_pipe.send(f'Tune ϕ in col {column.nodes[0].column} for u{i}.')
-                    self.mesh.phis[(column.node_idxs,)] = self.orig_phis[(column.node_idxs,)]
-                    self.update()
-                    self.status_pipe.send(f'Tune θ in col {column.nodes[0].column} for u{i}.')
-                    self.mesh.thetas[(column.node_idxs,)] = self.orig_thetas[(column.node_idxs,)]
-                    self.update()
+            if by_column:
+                for column in mesh.columns:
+                    if len(column.node_idxs) > 0 or i == 0:
+                        self.status_pipe.send(f'Tune ϕ in col {column.nodes[0].column} for u{i}.')
+                        self.mesh.phis[(column.node_idxs,)] = self.orig_phis[(column.node_idxs,)]
+                        self.update()
+                        self.status_pipe.send(f'Tune θ in col {column.nodes[0].column} for u{i}.')
+                        self.mesh.thetas[(column.node_idxs,)] = self.orig_thetas[(column.node_idxs,)]
+                        self.update()
+            else:
+                self.status_pipe.send(f'Tune ϕ, θ for u{i}.')
+                self.mesh.phis[(mesh.node_idxs,)] = self.orig_phis[(mesh.node_idxs,)]
+                self.mesh.thetas[(mesh.node_idxs,)] = self.orig_thetas[(mesh.node_idxs,)]
+                self.update()
         self.status_pipe.send('Idle')
