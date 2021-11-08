@@ -1,5 +1,5 @@
 import time
-from typing import Optional, Callable
+from typing import Optional, Callable, Union
 
 import numpy as np
 
@@ -14,7 +14,7 @@ from holoviews.streams import Pipe
 import panel as pn
 
 from scipy.special import beta as beta_func
-from simphox.utils import random_vector, random_unitary
+from simphox.utils import random_unitary
 
 
 def beta_pdf(x, a, b):
@@ -48,7 +48,7 @@ class Mesh(Device):
     """
 
     mesh_fn: Callable[[np.ndarray, ...], ForwardMesh]
-    orig_matrix: Optional[np.ndarray] = None
+    orig_matrix: Optional[Union[np.ndarray, int]] = 8
     dc: DC = dc
     ps: ThermalPS = ps
     ridge: str = CommonLayer.RIDGE_SI
@@ -56,6 +56,7 @@ class Mesh(Device):
 
     def __post_init_post_parse__(self):
         self.mesh = self.mesh_fn(self.orig_matrix)
+        self.orig_matrix = self.orig_matrix if not isinstance(self.orig_matrix, int) else self.mesh.matrix()
         self.interport_distance = self.dc.interport_distance
         port = {}
         self.n = self.mesh.n

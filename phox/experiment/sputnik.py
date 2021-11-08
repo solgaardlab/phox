@@ -632,14 +632,14 @@ class Sputnik(ActivePhotonicsImager):
     def power_panel(self):
         def power_bars(data):
             return hv.Bars(data, hv.Dimension('Port'), 'Fractional power').opts(ylim=(0, 1))
-        dmap = hv.DynamicMap(power_bars, streams=[self.power_pipe]).opts(shared_axes=False)
+        dmap = hv.DynamicMap(power_bars, streams=[self.spot_pipe]).opts(shared_axes=False)
         power_toggle = pn.widgets.Toggle(name='Power', value=False)
         lr_toggle = pn.widgets.Toggle(name='Left Spots', value=False)
 
         @gen.coroutine
         def update_plot():
-            self.power_pipe.send([(i, p) for i, p in enumerate(self.fractional_left
-                                                               if lr_toggle.value else self.fractional_right)])
+            self.spot_pipe.send([(i, p) for i, p in enumerate(self.fractional_left
+                                                              if lr_toggle.value else self.fractional_right)])
         cb = PeriodicCallback(update_plot, 100)
 
         def change_power(*events):
