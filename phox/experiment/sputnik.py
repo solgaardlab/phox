@@ -23,6 +23,7 @@ import logging
 import holoviews as hv
 
 from ..model.phase import PhaseCalibration
+from ..model.legacy import reck
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -264,7 +265,7 @@ class Sputnik(ActivePhotonicsImager):
         return pn.Column(reset_button, bar_button, cross_button, alternating_button, uniform_button, buttons)
 
     def set_unitary(self, u: np.ndarray):
-        network = triangular(u)
+        network = triangular(u.conj().T)
         thetas, phis, gammas = network.params
         self.set_unitary_phases(np.mod(thetas, 2 * np.pi), np.mod(phis, 2 * np.pi))
         return gammas
