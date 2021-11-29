@@ -8,7 +8,7 @@ from shapely.geometry import Polygon
 
 import logging
 logger = logging.getLogger()
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.WARN)
 
 
 class ActivePhotonicsImager:
@@ -45,8 +45,9 @@ class ActivePhotonicsImager:
         self.laser = LaserHP8164A(port=laser_port)
         self.laser.connect()
         logger.info('Connecting to lightwave multimeter')
-        self.lmm = LightwaveMultimeterHP8163A(port=lmm_port)
-        self.lmm.connect()
+        if lmm_port is not None:
+            self.lmm = LightwaveMultimeterHP8163A(port=lmm_port)
+            self.lmm.connect()
         logger.info('Turning laser off...')
         self.laser.state = 0
         time.sleep(1)
@@ -186,6 +187,7 @@ class ActivePhotonicsImager:
         """
         self.camera.stop()
         self.stage.close()
+
 
 
 def _get_grating_spot(img: np.ndarray, center: Tuple[int, int], window_size: int) -> Tuple[np.ndarray, np.ndarray]:

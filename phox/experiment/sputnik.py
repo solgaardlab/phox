@@ -13,9 +13,10 @@ from dphox.demo import mzi
 import time
 import numpy as np
 
-from simphox.circuit import triangular
+from simphox.circuit import triangular, unbalanced_tree
+from scipy.stats import unitary_group
 from simphox.utils import random_unitary, random_vector
-from ..utils import vector_to_phases, phases_to_vector
+from ..utils import phases_to_vector
 import panel as pn
 import pickle
 
@@ -23,10 +24,9 @@ import logging
 import holoviews as hv
 
 from ..model.phase import PhaseCalibration
-from ..model.legacy import reck
 
 logger = logging.getLogger()
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.WARN)
 
 mesh = LocalMesh(mzi, 6)
 PS_LAYER = 'heater'
@@ -73,7 +73,7 @@ class Sputnik(ActivePhotonicsImager):
     def __init__(self, interlayer_xy: Tuple[float, float], spot_xy: Tuple[int, int], interspot_xy: Tuple[int, int],
                  ps_calibration: Dict, window_shape: Tuple[int, int] = (15, 10),
                  backward_shift: float = 0.033, home: Tuple[float, float] = (0, 0), stage_port: str = '/dev/ttyUSB1',
-                 laser_port: str = '/dev/ttyUSB0', lmm_port: str = '/dev/ttyUSB2',
+                 laser_port: str = '/dev/ttyUSB0', lmm_port: str = None,
                  camera_calibration_filepath: Optional[str] = None, integration_time: int = 20000,
                  plim: Tuple[float, float] = (0.05, 4.25), vmax: float = 6):
         """This class is meant to test our first triangular mesh fabricated in AMF.
@@ -202,12 +202,15 @@ class Sputnik(ActivePhotonicsImager):
 
     def propagation_toggle_panel(self, chan: int = 64):
         def toggle(*events):
-            self.backward = not self.backward
-            self.control.ttl_toggle(chan)
+            self.toggle_propagation_direction(chan)
 
         button = pn.widgets.Button(name='Switch Propagation Direction')
         button.on_click(toggle)
         return button
+
+    def toggle_propagation_direction(self, chan: int = 64):
+        self.backward = not self.backward
+        self.control.ttl_toggle(chan)
 
     def led_panel(self, chan: int = 65):
         return self.control.continuous_slider(chan, name='LED Voltage', vlim=(0, 1))
@@ -265,10 +268,15 @@ class Sputnik(ActivePhotonicsImager):
         return pn.Column(reset_button, bar_button, cross_button, alternating_button, uniform_button, buttons)
 
     def set_unitary(self, u: np.ndarray):
-        network = triangular(u.conj().T)
+        network = triangular(u)
         thetas, phis, gammas = network.params
+        # thetas, phis, _, gammas = reck(np.fliplr(np.flipud(u)))
         self.set_unitary_phases(np.mod(thetas, 2 * np.pi), np.mod(phis, 2 * np.pi))
         return gammas
+        # network = triangular(u.conj().T)
+        # thetas, phis, gammas = network.params
+        # self.set_unitary_phases(np.mod(thetas, 2 * np.pi), np.mod(phis, 2 * np.pi))
+        # return gammas
 
     def uhash(self, x: np.ndarray, us: np.ndarray, uc: Optional[np.ndarray] = None):
         targets = []
@@ -455,24 +463,34 @@ class Sputnik(ActivePhotonicsImager):
             ps.calibrate(pbar, n_samples=n_samples, wait_time=wait_time)
             ps.phase = 0
 
-    def set_input(self, vector: np.ndarray, add_normalization: bool = False, theta_only: bool = False):
+    def set_input(self, vector: np.ndarray, add_normalization: bool = False, theta_only: bool = False,
+                  backward: bool = False):
         n = 4
-        vector = vector.conj()
+        if vector.size == 4:
+            vector = np.hstack((vector, 0))
         if add_normalization:
             vector = vector / np.sqrt(np.sum(np.abs(vector))) * np.sqrt(n / (n + 1))
             vector = np.append(vector, np.sqrt(1 / (n + 1)))
-        # design inconsistency on chip led to this:
-        lower_phi = (1, 1, 0, 1, 1) if self.backward else (1, 1, 1, 1, 1)
-        lower_theta = (1, 1, 1, 1, 1)
 
-        thetas, phis = vector_to_phases(vector, lower_theta, lower_phi)
+        mesh = unbalanced_tree(vector[::-1].astype(np.complex128))
+        thetas, phis, gammas = mesh.params
+        thetas, phis = np.mod(thetas[::-1], 2 * np.pi), np.mod(phis[::-1], 2 * np.pi)
+
+        if self.backward or backward:
+            # hack that fixes an unfortunate circuit design error.
+            phis[1] = np.mod(phis[1] + phis[2], 2 * np.pi)
+            phis[2] = np.mod(-phis[2], 2 * np.pi)
 
         for i in range(n):
             phase = {'theta': thetas[i], 'phi': phis[i]}
             for var in ('theta',) if theta_only else ('theta', 'phi'):
-                key = f'{var}_right' if self.backward else f'{var}_left'
+                key = f'{var}_right' if self.backward or backward else f'{var}_left'
                 self.set_phase(self.network[key][i], phase[var])
         self.set_phase(self.network['theta_ref'], np.pi)
+        return gammas[-1]
+
+    def set_output(self, vector: np.ndarray):
+        return self.set_input(vector, backward=True)
 
     def set_phase(self, ps, phase):
         self.ps[tuple(ps)].phase = phase
@@ -611,6 +629,24 @@ class Sputnik(ActivePhotonicsImager):
             calibrated_values,
         )
 
+    def hessian_test(self, delta: float = 0.1):
+        u = unitary_group.rvs(4)
+        self.set_unitary(u)
+        self.set_input(np.array((*u.T[-1], 0)))
+        phase_shift_locs = ((5, 0), (7, 1), (9, 2), (4, 0), (6, 1), (8, 2))
+        measurements = []
+        for i in phase_shift_locs:
+            for j in phase_shift_locs:
+                self.ps[i].phase += delta
+                self.ps[j].phase += delta
+                time.sleep(0.1)
+                measurements.append(self.fractional_right)
+                self.ps[j].phase -= 2 * delta
+                time.sleep(0.1)
+                measurements.append(self.fractional_right)
+
+
+
     def get_unitary_phases(self):
         ts = [self.ps[tuple(t)].phase for t in self.network['theta_mesh']]
         ps = [self.ps[tuple(p)].phase for p in self.network['phi_mesh']]
@@ -663,6 +699,47 @@ class Sputnik(ActivePhotonicsImager):
     @property
     def fractional_left(self):
         return self.camera.spot_powers[2::3] / np.sum(self.camera.spot_powers[2::3])
+
+    @property
+    def fractional_center(self):
+        return self.camera.spot_powers[1::3] / np.sum(self.camera.spot_powers[1::3])
+
+    def default_panel(self):
+        mesh_panel = self.mesh_panel()
+        livestream_panel = self.camera.livestream_panel(cmap='gray')
+        move_panel = self.stage.move_panel()
+        power_panel = self.laser.power_panel()
+        spot_panel = self.power_panel()
+        wavelength_panel = self.laser.wavelength_panel()
+        led_panel = self.led_panel()
+        home_panel = self.home_panel()
+        propagation_toggle_panel = self.propagation_toggle_panel()
+        input_panel = self.input_panel()
+        return pn.Column(
+            pn.Pane(pn.Row(mesh_panel, input_panel), name='Mesh'),
+            pn.Row(pn.Tabs(
+                ('Live Interface',
+                 pn.Column(
+                     pn.Row(livestream_panel,
+                            pn.Column(move_panel, home_panel, power_panel,
+                                      wavelength_panel, led_panel,
+                                      propagation_toggle_panel)
+                            )
+                 )),
+                ('Calibration Panel', self.calibrate_panel())
+            ), spot_panel)
+        )
+
+    def svd_proof(self, u, d, v, x):
+        self.set_unitary(v.T)
+        self.set_input(np.array((*x, 0)))
+        time.sleep(0.05)
+        res = np.sqrt(np.maximum(self.fractional_right[:4], 0)) * np.exp(1j * np.angle(v @ x)) * np.linalg.norm(x)
+        res = res * d
+        self.set_unitary(u.T)
+        self.set_input(np.array((*res, 0)))
+        time.sleep(0.05)
+        return np.linalg.norm(res) * np.sqrt(np.maximum(self.fractional_right[:4], 0))
 
 
 class PhaseShifter:
@@ -753,7 +830,7 @@ class PhaseShifter:
         Returns:
 
         """
-        self.mesh.control.write_chan(self.voltage_channel, self.p2v(phase))
+        self.mesh.control.write_chan(self.voltage_channel, self.p2v(np.mod(phase, 2 * np.pi)))
         self._phase = phase
 
     def reset(self):

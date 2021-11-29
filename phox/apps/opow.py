@@ -1,11 +1,3 @@
-#
-# class OPOW:
-#     def __init__(self):
-#
-#     def heavyhash(self):
-#
-#     def uhash(self, input_vector):
-
 import hashlib
 import numpy as np
 
@@ -44,3 +36,11 @@ def pow_hash_matmul(M, input):
             y[i] += M[i][j] * x[j]
         y[i] = y[i] >> 10
     return x, y
+
+
+def random_lh_matrix(n_vecs, n, num_vals, normed=False, is_complex=False):
+    offset = num_vals - 1
+    v = (2 * np.random.randint(num_vals, size=(n_vecs, n)) - offset) + ((2 * np.random.randint(num_vals, size=(n_vecs, n)) - offset) * 1j) * is_complex
+    return v / np.sqrt(np.sum(v ** 2, axis=1)[:, np.newaxis]) if normed else v
+
+

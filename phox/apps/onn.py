@@ -14,12 +14,11 @@ import pickle
 #TODO(sunil): fix a lot of boilerplate code.
 class ONN2D:
     def __init__(self, dataset: Dataset, dataset_test: Dataset,
-                 n_layers: int, thetas: list = None, phis: list = None,
+                 n_layers: int,
                  y_sim: np.ndarray = None, y_sim_test: np.ndarray = None,
                  y_onn: np.ndarray = None, y_onn_test: np.ndarray = None):
         self.n_layers = n_layers
-        self.thetas = thetas
-        self.phis = phis
+        self.unitaries = []
         self.dataset = dataset
         self.dataset_test = dataset_test
         self.y_sim = [] if y_sim is None else np.asarray(y_sim)
@@ -27,31 +26,20 @@ class ONN2D:
         self.y_onn = [] if y_onn is None else y_onn
         self.y_onn_test = [] if y_onn_test is None else y_onn_test
 
-    def self_configure(self, mesh: Sputnik, model, pbar: Callable):
-        thetas = []
-        phis = []
-
-        for i in pbar(range(self.n_layers)):
-            mesh.set_unitary_sc(model.layers[i].matrix.conj())
-            ts, ps = mesh.get_unitary_phases()
-            thetas.append(ts)
-            phis.append(ps)
-        mesh.to_layer(16)  # the layer where outputs are measured
-        self.thetas = thetas
-        self.phis = phis
+    def set_model(self, model):
+        self.unitaries = [model.layers[i].matrix.conj().T for i in range(self.n_layers)]
 
     def onn(self, input_vector: np.ndarray, mesh: Sputnik,
-            meas_delay: float = 1, factor: float = 3):
+            meas_delay: float = 0.2, factor: float = 3):
         outputs = input_vector
-        for ts, ps in zip(self.thetas, self.phis):
-            mesh.set_input(np.hstack((outputs, 0)))
-            mesh.set_unitary_phases(ts, ps)
+        for u in self.unitaries:
+            mesh.set_input(outputs)
+            mesh.set_unitary(u)
             time.sleep(meas_delay)
-            spots = np.abs(mesh.camera.spot_powers[::3])
-            outputs = (np.sqrt(spots / np.sum(np.abs(spots))))[:4]
+            outputs = np.sqrt(np.abs(mesh.fractional_right[:4]))
         return softmax(factor ** 2 * np.asarray((np.sum(outputs[:2] ** 2), np.sum(outputs[2:] ** 2))))
 
-    def classify_train(self, mesh, model, pbar=None, meas_time: float = 1):
+    def classify_train(self, mesh, model, pbar=None, meas_time: float = 0.2):
         self.y_sim = []
         self.y_onn = []
         iterator = pbar(range(len(self.dataset.X))) if pbar else range(len(self.dataset.X))
@@ -61,7 +49,7 @@ class ONN2D:
         self.y_sim = np.asarray(self.y_sim)[:, 0, :]
         self.y_onn = np.asarray(self.y_onn)
 
-    def classify_test(self, mesh, model, pbar=None, meas_time: float = 1):
+    def classify_test(self, mesh, model, pbar=None, meas_time: float = 0.2):
         self.y_sim_test = []
         self.y_onn_test = []
         iterator = pbar(range(len(self.dataset_test.X))) if pbar else range(len(self.dataset_test.X))
@@ -108,10 +96,10 @@ class ONN2D:
         return accuracy(self.dataset.y, self.y_sim, self.y_onn)
 
 
-def accuracy(actual, predicted, simulated):
-    y = np.asarray([y[0] > y[1] for y in predicted], dtype=np.int)
-    y_sim = np.asarray([y[0] > y[1] for y in simulated], dtype=np.int)
-    y_act = np.asarray([y[0] > y[1] for y in actual], dtype=np.int)
+def accuracy(actual, predicted, experimental):
+    y = np.asarray([y[0] > y[1] for y in predicted], dtype=np.int32)
+    y_sim = np.asarray([y[0] > y[1] for y in experimental], dtype=np.int32)
+    y_act = np.asarray([y[0] > y[1] for y in actual], dtype=np.int32)
     return np.sum(np.abs(y - y_act)), np.sum(np.abs(y_sim - y_act))
 
 
