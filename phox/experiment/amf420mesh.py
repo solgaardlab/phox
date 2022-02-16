@@ -1,37 +1,31 @@
-from typing import Tuple, Callable, Optional, Dict
+import logging
+import pickle
+import time
+from typing import Callable, Dict, Optional, Tuple
 
+import holoviews as hv
+import numpy as np
+import panel as pn
+from dphox.demo import mesh, mzi
 from holoviews import opts
 from holoviews.streams import Pipe
+from scipy.stats import unitary_group
+from simphox.circuit import triangular, unbalanced_tree
+from simphox.utils import random_unitary, random_vector
 from tornado import gen
 from tornado.ioloop import PeriodicCallback
 
-from .activephotonicsimager import ActivePhotonicsImager, _get_grating_spot
+from .activephotonicsimager import _get_grating_spot, ActivePhotonicsImager
 from ..instrumentation import XCamera
-from dphox.active import LocalMesh
-from dphox.demo import mzi
-
-import time
-import numpy as np
-
-from simphox.circuit import triangular, unbalanced_tree
-from scipy.stats import unitary_group
-from simphox.utils import random_unitary, random_vector
-from ..utils import phases_to_vector
-import panel as pn
-import pickle
-
-import logging
-import holoviews as hv
-
 from ..model.phase import PhaseCalibration
 
+path_array, ps_array = mesh.demo_polys()
 logger = logging.getLogger()
 logger.setLevel(logging.WARN)
 
-mesh = LocalMesh(mzi, 6)
 PS_LAYER = 'heater'
 
-SPUTNIK_CONFIG = {
+AMF20MESH_CONFIG = {
     "network": {"theta_left": [[1, 1], [3, 2], [5, 3], [7, 4]], "phi_left": [[2, 1], [4, 2], [6, 3], [8, 4]],
                 "theta_right": [[17, 1], [15, 2], [13, 3], [11, 4]], "phi_right": [[16, 1], [14, 2], [12, 2], [10, 4]],
                 "theta_mesh": [[5, 0], [7, 1], [9, 2], [9, 0], [11, 1], [13, 0]],
@@ -69,7 +63,7 @@ SPUTNIK_CONFIG = {
              {"grid_loc": [10, 4], "spot_loc": [10, 3], "voltage_channel": 34, "meta_ps": [[7, 4], [11, 4]]}]}
 
 
-class Sputnik(ActivePhotonicsImager):
+class AMF20Mesh(ActivePhotonicsImager):
     def __init__(self, interlayer_xy: Tuple[float, float], spot_xy: Tuple[int, int], interspot_xy: Tuple[int, int],
                  ps_calibration: Dict, window_shape: Tuple[int, int] = (15, 10),
                  backward_shift: float = 0.033, home: Tuple[float, float] = (0, 0), stage_port: str = '/dev/ttyUSB1',
@@ -94,14 +88,14 @@ class Sputnik(ActivePhotonicsImager):
             plim:
             vmax:
         """
-        self.network = SPUTNIK_CONFIG['network']
+        self.network = AMF20MESH_CONFIG['network']
         self.thetas = [PhaseShifter(**ps_dict, mesh=self,
                                     calibration=PhaseCalibration(**ps_calibration[tuple(ps_dict['grid_loc'])])
-                                    ) for ps_dict in SPUTNIK_CONFIG['thetas']]
+                                    ) for ps_dict in AMF20MESH_CONFIG['thetas']]
         self.thetas: Dict[Tuple[int, int], PhaseShifter] = {ps.grid_loc: ps for ps in self.thetas}
         self.phis = [PhaseShifter(**ps_dict, mesh=self,
                                   calibration=PhaseCalibration(**ps_calibration[tuple(ps_dict['grid_loc'])])
-                                  ) for ps_dict in SPUTNIK_CONFIG['phis']]
+                                  ) for ps_dict in AMF20MESH_CONFIG['phis']]
         self.phis: Dict[Tuple[int, int], PhaseShifter] = {ps.grid_loc: ps for ps in self.phis}
         self.ps: Dict[Tuple[int, int], PhaseShifter] = {**self.thetas, **self.phis}
         self.interlayer_xy = interlayer_xy
@@ -114,8 +108,8 @@ class Sputnik(ActivePhotonicsImager):
         self.integration_time = integration_time
         self.backward = False
         self.backward_shift = backward_shift
-        super(Sputnik, self).__init__(home, stage_port, laser_port, lmm_port, camera_calibration_filepath,
-                                      integration_time, plim, vmax)
+        super(AMF20Mesh, self).__init__(home, stage_port, laser_port, lmm_port, camera_calibration_filepath,
+                                        integration_time, plim, vmax)
 
         self.reset_control()
         self.camera.start_frame_loop()
@@ -355,19 +349,16 @@ class Sputnik(ActivePhotonicsImager):
                     self.update_mesh_image()
 
     def mesh_panel(self, power_cmap: str = 'hot', ps_cmap: str = 'greens'):
-        polys = [np.asarray(p.exterior.coords.xy).T
-                 for multipoly in mesh.path_array.flatten()
-                 for p in multipoly]
+        polys = [p.T for multipoly in path_array.flatten() for p in multipoly]
         waveguides = hv.Polygons(polys).opts(data_aspect=1, frame_height=200,
                                              ylim=(-10, 70), xlim=(0, mesh.size[0]),
                                              color='black', line_width=2)
-        phase_shift_polys = [np.asarray(p.buffer(1).exterior.coords.xy).T
-                             for p in mesh.phase_shifter_array('heater')]
+        phase_shift_polys = [p.T for p in ps_array]
         labels = np.fliplr(np.fliplr(np.mgrid[0:6, 0:19]).reshape((2, -1)).T)
-        centroids = [(poly.centroid.x, poly.centroid.y) for poly in mesh.phase_shifter_array('heater')]
+        centroids = [np.mean(poly, axis=1) for poly in ps_array]
 
         text = hv.Overlay([hv.Text(centroid[0],
-                                   centroid[1] + mesh.interport_distance / 2,
+                                   centroid[1] + mzi.interport_distance / 2,
                                    f'{label[0]},{label[1]}', fontsize=7)
                            for label, centroid in zip(list(labels), centroids) if tuple(label) in self.ps])
 
@@ -406,7 +397,7 @@ class Sputnik(ActivePhotonicsImager):
         powers, spots = self.mesh_img(6)
         powers[powers <= 0] = 0
         powers = np.flipud(np.sqrt(powers / np.max(powers)))
-        self.power_pipe.send([p for p, multipoly in zip(powers.flatten(), mesh.path_array.flatten())
+        self.power_pipe.send([p for p, multipoly in zip(powers.flatten(), path_array.flatten())
                               for _ in multipoly])
         data = np.zeros((6, 19))
         for loc in self.ps:
@@ -498,50 +489,6 @@ class Sputnik(ActivePhotonicsImager):
     @property
     def phases(self):
         return {loc: self.ps[loc].phase for loc in self.ps}
-
-    def read_output(self, pbar: Optional[Callable] = None, update_mesh: bool = False):
-        direction = 'left' if self.backward else 'right'
-        theta_ps = self.network[f'theta_{direction}'][::-1]
-        phi_ps = self.network[f'phi_{direction}'][::-1]
-
-        theta_vs, phi_vs = [], []
-
-        lower_phi = (0, 0, 1, 0, 0) if self.backward else (0, 0, 0, 0, 0)
-        lower_theta = (0, 0, 0, 0, 0)
-
-        self.to_layer(0 if self.backward else 16)
-
-        # TODO(sunil): fix hardcoding
-        for i in range(4):
-            theta, phi = tuple(theta_ps[i]), tuple(phi_ps[i])
-            # self.ps[theta].phase = np.pi / 2
-            # time.sleep(0.1)
-            self.to_layer(phi[0])
-            time.sleep(0.1)
-            idx = phi[1]
-            self.ps[theta].phase = 2 * np.arctan2(
-                np.sqrt(self.fractional_left[idx]), np.sqrt(self.fractional_left[idx + 1])
-            )
-            time.sleep(0.1)
-            phi_p = 2 * np.arctan2(
-                np.sqrt(self.fractional_right[idx]), np.sqrt(self.fractional_right[idx + 1])
-            )
-            possible_p = (phi_p, 2 * np.pi - phi_p)
-            powers = np.zeros(2)
-            for i, p in enumerate(possible_p):
-                self.ps[phi].phase = p
-                time.sleep(0.1)
-                powers[i] = self.fractional_right[idx + 1]
-            null_idx = 0 if powers[0] < powers[1] else 1
-            self.ps[phi].phase = possible_p[null_idx]
-
-            if update_mesh:
-                self.update_mesh_image()
-
-        thetas = np.asarray(theta_vs)  # change this based on calibration
-        phis = np.asarray(phi_vs)  # change this based on calibration
-
-        return phases_to_vector(thetas, phis, lower_theta, lower_phi)
 
     def calibrate_panel(self, vlim: Tuple[float, float] = (0.5, 4.5)):
         vs = np.sqrt(np.linspace(vlim[0] ** 2, vlim[1] ** 2, 20000))
@@ -722,8 +669,7 @@ class Sputnik(ActivePhotonicsImager):
                  pn.Column(
                      pn.Row(livestream_panel,
                             pn.Column(move_panel, home_panel, power_panel,
-                                      wavelength_panel, led_panel,
-                                      propagation_toggle_panel)
+                                      wavelength_panel, led_panel, propagation_toggle_panel)
                             )
                  )),
                 ('Calibration Panel', self.calibrate_panel())
@@ -744,7 +690,7 @@ class Sputnik(ActivePhotonicsImager):
 
 class PhaseShifter:
     def __init__(self, grid_loc: Tuple[int, int], spot_loc: Tuple[int, int],
-                 voltage_channel: int, mesh: Sputnik,
+                 voltage_channel: int, mesh: AMF20Mesh,
                  meta_ps: Optional[Tuple[Tuple[int, int], Tuple[int, int]]] = None,
                  calibration: Optional[PhaseCalibration] = None):
         self.grid_loc = tuple(grid_loc)
