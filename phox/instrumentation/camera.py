@@ -132,7 +132,7 @@ set_property_value_f.restype = ctypes.c_ulong  # ErrCode
 
 
 class XCamera:
-    def __init__(self, name: str = 'cam://0', integration_time: int = 5000,
+    def __init__(self, name: str = 'cam://0', integration_time: int = 1000,
                  spots: Optional[List[Tuple[int, int, int, int]]] = None):
         """Xenics Camera (XCamera)
 
@@ -157,6 +157,7 @@ class XCamera:
         self.spot_powers = []
         self.livestream_on = False
         self.power_det_on = False
+        self.num_frames = 0
 
     def start(self) -> int:
         self.started = True
@@ -185,6 +186,7 @@ class XCamera:
                 on_frame(frame)
             with self.frame_lock:
                 self._current_frame = frame.copy()
+                self.num_frames += 1
 
     def _livestream_loop(self, on_frame: Optional[Callable] = None):
         while self.started_frame_loop:
@@ -219,9 +221,10 @@ class XCamera:
         if error != 0:
             raise RuntimeError(f'Camera Error: {errcodes[error]}')
 
-        return frame if self.background_reference is None else frame.astype(np.float) - self.background_reference.astype(np.float)
+        return frame  if self.background_reference is None else frame.astype(np.float) - self.background_reference.astype(np.float)
 
     def set_integration_time(self, integration_time: int):
+        self.integration_time = integration_time
         return errcodes[set_property_value(self.handle, 'IntegrationTime'.encode('UTF-8'),
                                            str(integration_time).encode('UTF-8'), 0)]
 

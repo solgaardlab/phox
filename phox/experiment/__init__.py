@@ -1,2 +1,2 @@
 from .activephotonicsimager import ActivePhotonicsImager
-from .sputnik import Sputnik, PhaseShifter, PhaseCalibration
+from .amf420mesh import AMF420Mesh, PhaseShifter, PhaseCalibration

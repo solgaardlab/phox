@@ -1,7 +1,7 @@
 import logging
 import pickle
 import time
-from typing import Callable, Dict, Optional, Tuple
+from typing import Callable, Dict, Optional, Tuple, Union
 
 import holoviews as hv
 import numpy as np
@@ -10,7 +10,7 @@ from dphox.demo import mesh, mzi
 from holoviews import opts
 from holoviews.streams import Pipe
 from scipy.stats import unitary_group
-from simphox.circuit import triangular, unbalanced_tree
+from simphox.circuit import ForwardMesh, triangular, unbalanced_tree
 from simphox.utils import random_unitary, random_vector
 from tornado import gen
 from tornado.ioloop import PeriodicCallback
@@ -25,7 +25,7 @@ logger.setLevel(logging.WARN)
 
 PS_LAYER = 'heater'
 
-AMF20MESH_CONFIG = {
+AMF420MESH_CONFIG = {
     "network": {"theta_left": [[1, 1], [3, 2], [5, 3], [7, 4]], "phi_left": [[2, 1], [4, 2], [6, 3], [8, 4]],
                 "theta_right": [[17, 1], [15, 2], [13, 3], [11, 4]], "phi_right": [[16, 1], [14, 2], [12, 2], [10, 4]],
                 "theta_mesh": [[5, 0], [7, 1], [9, 2], [9, 0], [11, 1], [13, 0]],
@@ -63,7 +63,7 @@ AMF20MESH_CONFIG = {
              {"grid_loc": [10, 4], "spot_loc": [10, 3], "voltage_channel": 34, "meta_ps": [[7, 4], [11, 4]]}]}
 
 
-class AMF20Mesh(ActivePhotonicsImager):
+class AMF420Mesh(ActivePhotonicsImager):
     def __init__(self, interlayer_xy: Tuple[float, float], spot_xy: Tuple[int, int], interspot_xy: Tuple[int, int],
                  ps_calibration: Dict, window_shape: Tuple[int, int] = (15, 10),
                  backward_shift: float = 0.033, home: Tuple[float, float] = (0, 0), stage_port: str = '/dev/ttyUSB1',
@@ -88,14 +88,14 @@ class AMF20Mesh(ActivePhotonicsImager):
             plim:
             vmax:
         """
-        self.network = AMF20MESH_CONFIG['network']
+        self.network = AMF420MESH_CONFIG['network']
         self.thetas = [PhaseShifter(**ps_dict, mesh=self,
                                     calibration=PhaseCalibration(**ps_calibration[tuple(ps_dict['grid_loc'])])
-                                    ) for ps_dict in AMF20MESH_CONFIG['thetas']]
+                                    ) for ps_dict in AMF420MESH_CONFIG['thetas']]
         self.thetas: Dict[Tuple[int, int], PhaseShifter] = {ps.grid_loc: ps for ps in self.thetas}
         self.phis = [PhaseShifter(**ps_dict, mesh=self,
                                   calibration=PhaseCalibration(**ps_calibration[tuple(ps_dict['grid_loc'])])
-                                  ) for ps_dict in AMF20MESH_CONFIG['phis']]
+                                  ) for ps_dict in AMF420MESH_CONFIG['phis']]
         self.phis: Dict[Tuple[int, int], PhaseShifter] = {ps.grid_loc: ps for ps in self.phis}
         self.ps: Dict[Tuple[int, int], PhaseShifter] = {**self.thetas, **self.phis}
         self.interlayer_xy = interlayer_xy
@@ -108,7 +108,7 @@ class AMF20Mesh(ActivePhotonicsImager):
         self.integration_time = integration_time
         self.backward = False
         self.backward_shift = backward_shift
-        super(AMF20Mesh, self).__init__(home, stage_port, laser_port, lmm_port, camera_calibration_filepath,
+        super(AMF420Mesh, self).__init__(home, stage_port, laser_port, lmm_port, camera_calibration_filepath,
                                         integration_time, plim, vmax)
 
         self.reset_control()
@@ -207,7 +207,7 @@ class AMF20Mesh(ActivePhotonicsImager):
         self.control.ttl_toggle(chan)
 
     def led_panel(self, chan: int = 65):
-        return self.control.continuous_slider(chan, name='LED Voltage', vlim=(0, 1))
+        return self.control.continuous_slider(chan, name='LED Voltage', vlim=(0, 3))
 
     def home_panel(self):
         home_button = pn.widgets.Button(name='Home')
@@ -261,16 +261,11 @@ class AMF20Mesh(ActivePhotonicsImager):
         reset_button.on_click(reset)
         return pn.Column(reset_button, bar_button, cross_button, alternating_button, uniform_button, buttons)
 
-    def set_unitary(self, u: np.ndarray):
-        network = triangular(u)
+    def set_unitary(self, u: Union[np.ndarray, ForwardMesh]):
+        network = triangular(u) if isinstance(u, np.ndarray) else u
         thetas, phis, gammas = network.params
-        # thetas, phis, _, gammas = reck(np.fliplr(np.flipud(u)))
         self.set_unitary_phases(np.mod(thetas, 2 * np.pi), np.mod(phis, 2 * np.pi))
         return gammas
-        # network = triangular(u.conj().T)
-        # thetas, phis, gammas = network.params
-        # self.set_unitary_phases(np.mod(thetas, 2 * np.pi), np.mod(phis, 2 * np.pi))
-        # return gammas
 
     def uhash(self, x: np.ndarray, us: np.ndarray, uc: Optional[np.ndarray] = None):
         targets = []
@@ -350,15 +345,14 @@ class AMF20Mesh(ActivePhotonicsImager):
 
     def mesh_panel(self, power_cmap: str = 'hot', ps_cmap: str = 'greens'):
         polys = [p.T for multipoly in path_array.flatten() for p in multipoly]
-        waveguides = hv.Polygons(polys).opts(data_aspect=1, frame_height=200,
-                                             ylim=(-10, 70), xlim=(0, mesh.size[0]),
+        waveguides = hv.Polygons(polys).opts(data_aspect=1, frame_height=100,
+                                             ylim=(-10, mesh.size[1] + 10), xlim=(0, mesh.size[0]),
                                              color='black', line_width=2)
-        phase_shift_polys = [p.T for p in ps_array]
+        phase_shift_polys = [p for p in ps_array]
         labels = np.fliplr(np.fliplr(np.mgrid[0:6, 0:19]).reshape((2, -1)).T)
-        centroids = [np.mean(poly, axis=1) for poly in ps_array]
+        centroids = [np.mean(poly, axis=0) for poly in ps_array]
 
-        text = hv.Overlay([hv.Text(centroid[0],
-                                   centroid[1] + mzi.interport_distance / 2,
+        text = hv.Overlay([hv.Text(centroid[0], centroid[1] + mzi.interport_distance / 2,
                                    f'{label[0]},{label[1]}', fontsize=7)
                            for label, centroid in zip(list(labels), centroids) if tuple(label) in self.ps])
 
@@ -369,11 +363,11 @@ class AMF20Mesh(ActivePhotonicsImager):
             [{('x', 'y'): poly, 'phase_shift': z} for poly, z in zip(phase_shift_polys, data)], vdims='phase_shift'
         )
         powers = hv.DynamicMap(power_polys, streams=[self.power_pipe]).opts(
-            data_aspect=1, frame_height=200, ylim=(-10, 70),
+            data_aspect=1, frame_height=200, ylim=(-10, mesh.size[1] + 10),
             xlim=(0, mesh.size[0]), line_color='none', cmap=power_cmap, shared_axes=False
         )
         ps = hv.DynamicMap(ps_polys, streams=[self.ps_pipe]).opts(
-            data_aspect=1, frame_height=200, ylim=(-10, 70),
+            data_aspect=1, frame_height=200, ylim=(-10, mesh.size[1] + 10),
             xlim=(0, mesh.size[0]), line_color='none', cmap=ps_cmap, shared_axes=False, clim=(0, 2 * np.pi)
         )
         self.power_pipe.send(np.full(len(polys), np.nan))
@@ -601,9 +595,9 @@ class AMF20Mesh(ActivePhotonicsImager):
 
     def set_unitary_phases(self, ts, ps):
         for t, th in zip(self.network['theta_mesh'], ts):
-            self.ps[tuple(t)].phase = th
+            self.ps[tuple(t)].phase = np.mod(th, 2 * np.pi)
         for p, ph in zip(self.network['phi_mesh'], ps):
-            self.ps[tuple(p)].phase = ph
+            self.ps[tuple(p)].phase = np.mod(ph, 2 * np.pi)
 
     def to_calibration_file(self, filename: str):
         with open(filename, 'wb') as f:
@@ -687,10 +681,28 @@ class AMF20Mesh(ActivePhotonicsImager):
         time.sleep(0.05)
         return np.linalg.norm(res) * np.sqrt(np.maximum(self.fractional_right[:4], 0))
 
+    def matrix_prop(self, vs: np.ndarray, wait_time: float = 0.03, move_pause: float = 0.2):
+        prop_data = []
+        for col in (4, 7, 10, 13, 16):
+            self.to_layer(col)
+            prop_col_data = []
+            time.sleep(move_pause)
+            for v in vs:
+                self.set_input(v)
+                time.sleep(wait_time)
+                prop_col_data.append(np.stack([
+                    self.fractional_left,
+                    self.fractional_center,
+                    self.fractional_right
+                ]) * np.linalg.norm(v) ** 2)
+            prop_data.append(np.stack(prop_col_data))
+        prop_data = np.hstack(prop_data)
+        return prop_data.transpose((1, 0, 2))
+
 
 class PhaseShifter:
     def __init__(self, grid_loc: Tuple[int, int], spot_loc: Tuple[int, int],
-                 voltage_channel: int, mesh: AMF20Mesh,
+                 voltage_channel: int, mesh: AMF420Mesh,
                  meta_ps: Optional[Tuple[Tuple[int, int], Tuple[int, int]]] = None,
                  calibration: Optional[PhaseCalibration] = None):
         self.grid_loc = tuple(grid_loc)

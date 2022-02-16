@@ -1,4 +1,4 @@
-from phox.experiment import Sputnik
+from phox.experiment import AMF20Mesh
 import holoviews as hv
 import panel as pn
 import pickle
@@ -12,7 +12,7 @@ if __name__ == '__main__':
     with open('configs/ps_calibration_1557nm_2021_07_18_09_11.p', 'rb') as f:
         ps_calibration = pickle.load(f)
 
-    chip = Sputnik(
+    chip = AMF20Mesh(
         home=(0.05, -0.003),  # mm
         interlayer_xy=(0.0015, -0.3095),  # mm
         spot_xy=(456, 25),
