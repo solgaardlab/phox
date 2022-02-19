@@ -19,6 +19,8 @@ from .activephotonicsimager import _get_grating_spot, ActivePhotonicsImager
 from ..instrumentation import XCamera
 from ..model.phase import PhaseCalibration
 
+from coherent_meas_utils import Coherent_meas
+
 path_array, ps_array = mesh.demo_polys()
 logger = logging.getLogger()
 logger.setLevel(logging.WARN)
@@ -119,6 +121,11 @@ class AMF420Mesh(ActivePhotonicsImager):
         self.ps_pipe = Pipe()
         self.spot_pipe = Pipe(data=[(i, 0) for i in range(6)])
         time.sleep(0.1)
+
+        ### coherent measurement handle ###
+        self.cmeas_forward = Coherent_meas(self, backward = False)
+        self.cmeas_backward = Coherent_meas(self, backward = True)
+
 
     def to_layer(self, layer: int):
         self.stage.move(x=self.home[0] + self.interlayer_xy[0] * layer,
@@ -474,8 +481,11 @@ class AMF420Mesh(ActivePhotonicsImager):
         self.set_phase(self.network['theta_ref'], np.pi)
         return gammas[-1]
 
-    def read_output(self, backward: bool = False):
-        pass
+    def cmeas_output(self, backward: bool = False):
+        if backward:
+            return cmeas_forward.reconstruct_field()
+        else:
+            return cmeas_backward.reconstruct_field()
 
     def set_output(self, vector: np.ndarray):
         return self.set_input(vector, backward=not self.backward)
