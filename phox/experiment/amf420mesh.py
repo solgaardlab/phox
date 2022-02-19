@@ -483,9 +483,9 @@ class AMF420Mesh(ActivePhotonicsImager):
 
     def cmeas_output(self, backward: bool = False):
         if backward:
-            return cmeas_forward.reconstruct_field()
-        else:
             return cmeas_backward.reconstruct_field()
+        else:
+            return cmeas_forward.reconstruct_field()
 
     def set_output(self, vector: np.ndarray):
         return self.set_input(vector, backward=not self.backward)
