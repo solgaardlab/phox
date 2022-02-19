@@ -129,6 +129,9 @@ def get_gradient_predictions(onn_layers, X, y, idx=0):
 
 
 class BackpropAccuracyTest:
+    """This class tests a specific 3-layer photonic neural network.
+
+    """
     def __init__(self, chip, params_list, X, y, idx_list, iteration, wait_time: float = 0.05):
         self.X = X
         self.y = y
@@ -296,3 +299,4 @@ def plot_labels(ax, dataset: Dataset, ys: np.ndarray):
     labels = np.array(
         [0 if yi[0] > yi[1] else 1 for yi in np.abs(ys)]).flatten()
     ax.scatter(points_x, points_y, c=labels, edgecolors='black', linewidths=0.1, s=20, cmap=dark_bwr, alpha=1)
+

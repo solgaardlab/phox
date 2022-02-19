@@ -474,8 +474,11 @@ class AMF420Mesh(ActivePhotonicsImager):
         self.set_phase(self.network['theta_ref'], np.pi)
         return gammas[-1]
 
+    def read_output(self, backward: bool = False):
+        pass
+
     def set_output(self, vector: np.ndarray):
-        return self.set_input(vector, backward=True)
+        return self.set_input(vector, backward=not self.backward)
 
     def set_phase(self, ps, phase):
         self.ps[tuple(ps)].phase = phase
