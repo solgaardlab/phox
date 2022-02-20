@@ -132,7 +132,7 @@ class BackpropAccuracyTest:
     """This class tests a specific 3-layer photonic neural network.
 
     """
-    def __init__(self, chip, params_list, X, y, idx_list, iteration, wait_time: float = 0.05):
+    def __init__(self, chip: AMF420Mesh, params_list, X, y, idx_list, iteration, wait_time: float = 0.05):
         self.X = X
         self.y = y
         self.chip = chip
@@ -162,36 +162,42 @@ class BackpropAccuracyTest:
             self.chip.set_unitary_phases(self.onn_layers[f'layer{layer}'].thetas, self.onn_layers[f'layer{layer}'].phis)
             self.meas[f'sum_{layer}'] = self.chip.matrix_prop(sum_input)
 
-    def _forward_measure(self):
+    def _forward_measure(self, phase_cheat: bool = False):
         self.chip.set_transparent()
         self.meas['input_1'] = np.array([self.X[idx] for idx in self.idx_list])
         for layer in (1, 2, 3):
             self.chip.set_unitary_phases(self.onn_layers[f'layer{layer}'].thetas, self.onn_layers[f'layer{layer}'].phis)
             self.meas[f'forward_{layer}'] = self.chip.matrix_prop(self.meas[f'input_{layer}'])
-            self.meas[f'input_{layer + 1}'] = np.sqrt(np.maximum(self.meas[f'forward_{layer}'][-1][:, :4], 0))
+            if not phase_cheat:
+                self.chip.set_input(np.hstack((self.meas[f'input_{layer}'], 1)))
+                self.meas[f'input_{layer + 1}'] = self.chip.coherent_batch(self.meas[f'input_{layer}'])
+            else:
+                self.meas[f'input_{layer + 1}'] = np.sqrt(np.abs(self.meas[f'forward_{layer}'][-1][:, :4]))
+                self.meas[f'forward_out_{layer}'] = self.pred[f'forward_{layer}'][-1]
 
-    def _backward_measure(self):
+    def _backward_measure(self, phase_cheat: bool = False):
         cost_fn = [optical_softmax_cross_entropy(self.y[idx]) for idx in self.idx_list]
         self.meas['adjoint_4'] = np.array([jax.grad(cost_fn[i])(self.meas[f'input_4'][i:i + 1, :]).squeeze()
                                            for i in range(len(self.idx_list))])
         self.chip.set_transparent()
         self.chip.toggle_propagation_direction()
         for layer in (3, 2, 1):
-            # "phase cheating"
-            forward_phases = np.exp(-1j * np.angle(self.pred[f'forward_{layer}'][-1]))
-            backward_phases = np.exp(1j * np.angle(self.pred[f'backward_{layer}'][0]))
-
-            self.meas[f'error_{layer}'] = self.meas[f'adjoint_{layer + 1}'].real * forward_phases
+            forward_phasors = np.exp(-1j * np.angle(self.meas[f'forward_out_{layer}']))
+            self.meas[f'error_{layer}'] = self.meas[f'adjoint_{layer + 1}'].real * forward_phasors
             self.chip.set_unitary_phases(self.onn_layers[f'layer{layer}'].thetas, self.onn_layers[f'layer{layer}'].phis)
             self.meas[f'backward_{layer}'] = self.chip.matrix_prop(self.meas[f'error_{layer}'])
-            self.meas[f'adjoint_{layer}'] = np.sqrt(
-                np.maximum(self.meas[f'backward_{layer}'][0][:, :4], 0)) * backward_phases
+            if phase_cheat:
+                self.meas[f'backward_out_{layer}'] = self.pred[f'backward_{layer}'][0]
+            else:
+                self.meas[f'backward_out_{layer}'] = self.chip.coherent_batch(self.meas[f'error_{layer}'])
+            backward_phasors = np.exp(1j * np.angle(self.meas[f'backward_out_{layer}']))
+            self.meas[f'adjoint_{layer}'] = np.sqrt(np.abs(self.meas[f'backward_{layer}'][0][:, :4])) * backward_phasors
         self.chip.toggle_propagation_direction()
 
-    def run(self):
+    def run(self, phase_cheat: bool = False):
         self.chip.reset_control()
-        self._forward_measure()
-        self._backward_measure()
+        self._forward_measure(phase_cheat)
+        self._backward_measure(phase_cheat)
         self._sum_measure()
         self.chip.reset_control()
         self.meas['gradients'] = {f'layer{layer}': extract_gradients_from_powers(

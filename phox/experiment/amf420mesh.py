@@ -19,50 +19,49 @@ from .activephotonicsimager import _get_grating_spot, ActivePhotonicsImager
 from ..instrumentation import XCamera
 from ..model.phase import PhaseCalibration
 
-from coherent_meas_utils import Coherent_meas
-
 path_array, ps_array = mesh.demo_polys()
 logger = logging.getLogger()
 logger.setLevel(logging.WARN)
 
 PS_LAYER = 'heater'
+RIGHT_LAYER = 16
+LEFT_LAYER = 0
+
 
 AMF420MESH_CONFIG = {
-    "network": {"theta_left": [[1, 1], [3, 2], [5, 3], [7, 4]], "phi_left": [[2, 1], [4, 2], [6, 3], [8, 4]],
-                "theta_right": [[17, 1], [15, 2], [13, 3], [11, 4]], "phi_right": [[16, 1], [14, 2], [12, 2], [10, 4]],
-                "theta_mesh": [[5, 0], [7, 1], [9, 2], [9, 0], [11, 1], [13, 0]],
-                "phi_mesh": [[4, 0], [6, 1], [8, 2], [8, 0], [10, 1], [12, 0]], "theta_ref": [9, 5],
-                "theta_rows": [[[1, 1], [5, 0], [9, 0], [13, 0], [17, 1]], [[3, 2], [7, 1], [11, 1], [15, 2]],
-                               [[5, 3], [9, 2], [13, 3]], [[7, 4], [11, 4]], [[9, 5]]]},
-    "thetas": [{"grid_loc": [1, 1], "spot_loc": [0, 0], "voltage_channel": 5, "meta_ps": []},
-               {"grid_loc": [5, 0], "spot_loc": [4, 0], "voltage_channel": 17, "meta_ps": []},
-               {"grid_loc": [9, 0], "spot_loc": [8, 0], "voltage_channel": 39, "meta_ps": []},
-               {"grid_loc": [13, 0], "spot_loc": [12, 0], "voltage_channel": 48, "meta_ps": []},
-               {"grid_loc": [17, 1], "spot_loc": [16, 0], "voltage_channel": 59, "meta_ps": []},
-               {"grid_loc": [3, 2], "spot_loc": [2, 1], "voltage_channel": 7, "meta_ps": []},
-               {"grid_loc": [7, 1], "spot_loc": [6, 1], "voltage_channel": 26, "meta_ps": []},
-               {"grid_loc": [11, 1], "spot_loc": [10, 1], "voltage_channel": 40, "meta_ps": []},
-               {"grid_loc": [15, 2], "spot_loc": [14, 1], "voltage_channel": 55, "meta_ps": []},
-               {"grid_loc": [5, 3], "spot_loc": [4, 2], "voltage_channel": 15, "meta_ps": []},
-               {"grid_loc": [9, 2], "spot_loc": [8, 2], "voltage_channel": 32, "meta_ps": []},
-               {"grid_loc": [13, 3], "spot_loc": [12, 2], "voltage_channel": 46, "meta_ps": []},
-               {"grid_loc": [7, 4], "spot_loc": [6, 3], "voltage_channel": 25, "meta_ps": []},
-               {"grid_loc": [11, 4], "spot_loc": [10, 3], "voltage_channel": 38, "meta_ps": []},
-               {"grid_loc": [9, 5], "spot_loc": [8, 4], "voltage_channel": 28, "meta_ps": []}],
-    "phis": [{"grid_loc": [2, 1], "spot_loc": [4, 0], "voltage_channel": 4, "meta_ps": [[1, 1], [5, 0]]},
-             {"grid_loc": [4, 0], "spot_loc": [4, 0], "voltage_channel": 13, "meta_ps": [[1, 1], [5, 0]]},
-             {"grid_loc": [6, 1], "spot_loc": [8, 0], "voltage_channel": 20, "meta_ps": [[5, 0], [9, 0]]},
-             {"grid_loc": [8, 0], "spot_loc": [8, 0], "voltage_channel": 27, "meta_ps": [[5, 0], [9, 0]]},
-             {"grid_loc": [10, 1], "spot_loc": [12, 0], "voltage_channel": 37, "meta_ps": [[9, 0], [13, 0]]},
-             {"grid_loc": [12, 0], "spot_loc": [12, 0], "voltage_channel": 44, "meta_ps": [[9, 0], [13, 0]]},
-             {"grid_loc": [16, 1], "spot_loc": [16, 0], "voltage_channel": 56, "meta_ps": [[13, 0], [17, 1]]},
-             {"grid_loc": [4, 2], "spot_loc": [6, 1], "voltage_channel": 16, "meta_ps": [[3, 2], [7, 1]]},
-             {"grid_loc": [8, 2], "spot_loc": [10, 1], "voltage_channel": 35, "meta_ps": [[7, 1], [11, 1]]},
-             {"grid_loc": [12, 2], "spot_loc": [14, 1], "voltage_channel": 47, "meta_ps": [[11, 1], [15, 2]]},
-             {"grid_loc": [14, 2], "spot_loc": [14, 1], "voltage_channel": 51, "meta_ps": [[11, 1], [15, 2]]},
-             {"grid_loc": [6, 3], "spot_loc": [8, 2], "voltage_channel": 21, "meta_ps": [[5, 3], [9, 2]]},
-             {"grid_loc": [8, 4], "spot_loc": [10, 3], "voltage_channel": 24, "meta_ps": [[7, 4], [11, 4]]},
-             {"grid_loc": [10, 4], "spot_loc": [10, 3], "voltage_channel": 34, "meta_ps": [[7, 4], [11, 4]]}]}
+    "network": {"theta_left": [(1, 1), (3, 2), (5, 3), (7, 4)], "phi_left": [(2, 1), (4, 2), (6, 3), (8, 4)],
+                "theta_right": [(17, 1), (15, 2), (13, 3), (11, 4)], "phi_right": [(16, 1), (14, 2), (12, 2), (10, 4)],
+                "theta_mesh": [(5, 0), (7, 1), (9, 2), (9, 0), (11, 1), (13, 0)],
+                "phi_mesh": [(4, 0), (6, 1), (8, 2), (8, 0), (10, 1), (12, 0)], "theta_ref": (9, 5)},
+    "thetas": [{"grid_loc": (1, 1), "spot_loc": (0, 0), "voltage_channel": 5, "meta_ps": []},
+               {"grid_loc": (5, 0), "spot_loc": (4, 0), "voltage_channel": 17, "meta_ps": []},
+               {"grid_loc": (9, 0), "spot_loc": (8, 0), "voltage_channel": 39, "meta_ps": []},
+               {"grid_loc": (13, 0), "spot_loc": (12, 0), "voltage_channel": 48, "meta_ps": []},
+               {"grid_loc": (17, 1), "spot_loc": (16, 0), "voltage_channel": 59, "meta_ps": []},
+               {"grid_loc": (3, 2), "spot_loc": (2, 1), "voltage_channel": 7, "meta_ps": []},
+               {"grid_loc": (7, 1), "spot_loc": (6, 1), "voltage_channel": 26, "meta_ps": []},
+               {"grid_loc": (11, 1), "spot_loc": (10, 1), "voltage_channel": 40, "meta_ps": []},
+               {"grid_loc": (15, 2), "spot_loc": (14, 1), "voltage_channel": 55, "meta_ps": []},
+               {"grid_loc": (5, 3), "spot_loc": (4, 2), "voltage_channel": 15, "meta_ps": []},
+               {"grid_loc": (9, 2), "spot_loc": (8, 2), "voltage_channel": 32, "meta_ps": []},
+               {"grid_loc": (13, 3), "spot_loc": (12, 2), "voltage_channel": 46, "meta_ps": []},
+               {"grid_loc": (7, 4), "spot_loc": (6, 3), "voltage_channel": 25, "meta_ps": []},
+               {"grid_loc": (11, 4), "spot_loc": (10, 3), "voltage_channel": 38, "meta_ps": []},
+               {"grid_loc": (9, 5), "spot_loc": (8, 4), "voltage_channel": 28, "meta_ps": []}],
+    "phis": [{"grid_loc": (2, 1), "spot_loc": (4, 0), "voltage_channel": 4, "meta_ps": [(1, 1), (5, 0)]},
+             {"grid_loc": (4, 0), "spot_loc": (4, 0), "voltage_channel": 13, "meta_ps": [(1, 1), (5, 0)]},
+             {"grid_loc": (6, 1), "spot_loc": (8, 0), "voltage_channel": 20, "meta_ps": [(5, 0), (9, 0)]},
+             {"grid_loc": (8, 0), "spot_loc": (8, 0), "voltage_channel": 27, "meta_ps": [(5, 0), (9, 0)]},
+             {"grid_loc": (10, 1), "spot_loc": (12, 0), "voltage_channel": 37, "meta_ps": [(9, 0), (13, 0)]},
+             {"grid_loc": (12, 0), "spot_loc": (12, 0), "voltage_channel": 44, "meta_ps": [(9, 0), (13, 0)]},
+             {"grid_loc": (16, 1), "spot_loc": (16, 0), "voltage_channel": 56, "meta_ps": [(13, 0), (17, 1)]},
+             {"grid_loc": (4, 2), "spot_loc": (6, 1), "voltage_channel": 16, "meta_ps": [(3, 2), (7, 1)]},
+             {"grid_loc": (8, 2), "spot_loc": (10, 1), "voltage_channel": 35, "meta_ps": [(7, 1), (11, 1)]},
+             {"grid_loc": (12, 2), "spot_loc": (14, 1), "voltage_channel": 47, "meta_ps": [(11, 1), (15, 2)]},
+             {"grid_loc": (14, 2), "spot_loc": (14, 1), "voltage_channel": 51, "meta_ps": [(11, 1), (15, 2)]},
+             {"grid_loc": (6, 3), "spot_loc": (8, 2), "voltage_channel": 21, "meta_ps": [(5, 3), (9, 2)]},
+             {"grid_loc": (8, 4), "spot_loc": (10, 3), "voltage_channel": 24, "meta_ps": [(7, 4), (11, 4)]},
+             {"grid_loc": (10, 4), "spot_loc": (10, 3), "voltage_channel": 34, "meta_ps": [(7, 4), (11, 4)]}]}
 
 
 class AMF420Mesh(ActivePhotonicsImager):
@@ -111,7 +110,7 @@ class AMF420Mesh(ActivePhotonicsImager):
         self.backward = False
         self.backward_shift = backward_shift
         super(AMF420Mesh, self).__init__(home, stage_port, laser_port, lmm_port, camera_calibration_filepath,
-                                        integration_time, plim, vmax)
+                                         integration_time, plim, vmax)
 
         self.reset_control()
         self.camera.start_frame_loop()
@@ -121,16 +120,15 @@ class AMF420Mesh(ActivePhotonicsImager):
         self.ps_pipe = Pipe()
         self.spot_pipe = Pipe(data=[(i, 0) for i in range(6)])
         time.sleep(0.1)
+        self.layer = (0, False)
 
-        ### coherent measurement handle ###
-        self.cmeas_forward = Coherent_meas(self, backward = False)
-        self.cmeas_backward = Coherent_meas(self, backward = True)
-
-
-    def to_layer(self, layer: int):
-        self.stage.move(x=self.home[0] + self.interlayer_xy[0] * layer,
-                        y=self.home[1] + self.interlayer_xy[1] * layer + self.backward * self.backward_shift)
-        self.stage.wait_until_stopped()
+    def to_layer(self, layer: int, wait_time: float = 0.0):
+        if self.layer != (layer, self.backward):
+            self.layer = layer, self.backward
+            self.stage.move(x=self.home[0] + self.interlayer_xy[0] * layer,
+                            y=self.home[1] + self.interlayer_xy[1] * layer + self.backward * self.backward_shift)
+            self.stage.wait_until_stopped()
+            time.sleep(wait_time)
 
     def mesh_img(self, n: int, wait_time: float = 0.5, window_size: int = 20):
         """
@@ -225,6 +223,10 @@ class AMF420Mesh(ActivePhotonicsImager):
         home_button.on_click(go_home)
         return home_button
 
+    @property
+    def output_layer(self):
+        return LEFT_LAYER if self.backward else RIGHT_LAYER
+
     def input_panel(self):
         def transparent_bar(*events):
             self.set_transparent()
@@ -301,8 +303,16 @@ class AMF420Mesh(ActivePhotonicsImager):
         for ps_loc, phase in zip(self.network['phi_mesh'], phis):
             self.ps[tuple(ps_loc)].phase = phase
 
-    def to_output(self):
-        self.to_layer(0 if self.backward else 16)
+    def to_output(self, wait_time: float = 0.2):
+        """Move stage to the output of the network.
+
+        Args:
+            wait_time: Wait time after moving to the output (wait extra time for the stage to adjust).
+
+        Returns:
+
+        """
+        self.to_layer(LEFT_LAYER if self.backward else RIGHT_LAYER, wait_time=wait_time)
 
     def u_fidelity(self, u: np.ndarray):
         vals = []
@@ -323,13 +333,13 @@ class AMF420Mesh(ActivePhotonicsImager):
 
     def haar_fidelities(self, n: int = 1000, pbar: Optional[Callable] = None):
         self.set_transparent()
-        self.to_layer(16)
+        self.to_output()
         iterator = pbar(range(n)) if pbar is not None else range(n)
         return np.asarray([self.u_fidelity(random_unitary(4)) for _ in iterator])
 
     def matvec_comparisons(self, n: int = 100, wait_time: float = 0.1, pbar: Optional[Callable] = None):
         self.set_transparent()
-        self.to_layer(16)
+        self.to_output()
         iterator = pbar(range(n)) if pbar is not None else range(n)
         return np.asarray([self.matvec_comparison(random_unitary(4),
                                                   random_vector(4), wait_time) for _ in iterator])
@@ -456,7 +466,7 @@ class AMF420Mesh(ActivePhotonicsImager):
             ps.phase = 0
 
     def set_input(self, vector: np.ndarray, add_normalization: bool = False, theta_only: bool = False,
-                  backward: bool = False):
+                  backward: bool = False, override_backward: bool = False):
         n = 4
         if vector.size == 4:
             vector = np.hstack((vector, 0))
@@ -468,7 +478,9 @@ class AMF420Mesh(ActivePhotonicsImager):
         thetas, phis, gammas = mesh.params
         thetas, phis = np.mod(thetas[::-1], 2 * np.pi), np.mod(phis[::-1], 2 * np.pi)
 
-        if self.backward or backward:
+        backward = backward or (self.backward and not override_backward)
+
+        if backward:
             # hack that fixes an unfortunate circuit design error.
             phis[1] = np.mod(phis[1] + phis[2], 2 * np.pi)
             phis[2] = np.mod(-phis[2], 2 * np.pi)
@@ -476,19 +488,149 @@ class AMF420Mesh(ActivePhotonicsImager):
         for i in range(n):
             phase = {'theta': thetas[i], 'phi': phis[i]}
             for var in ('theta',) if theta_only else ('theta', 'phi'):
-                key = f'{var}_right' if self.backward or backward else f'{var}_left'
+                key = f'{var}_right' if backward else f'{var}_left'
                 self.set_phase(self.network[key][i], phase[var])
         self.set_phase(self.network['theta_ref'], np.pi)
         return gammas[-1]
 
-    def cmeas_output(self, backward: bool = False):
-        if backward:
-            return cmeas_backward.reconstruct_field()
-        else:
-            return cmeas_forward.reconstruct_field()
+    def set_output_transparent(self):
+        theta_locs = self.network["theta_left"] if self.backward else self.network["theta_right"]
+        phi_locs = self.network["phi_left"] if self.backward else self.network["phi_right"]
+        for theta_loc in theta_locs:
+            self.ps[theta_loc].phase = np.pi
+        for phi_loc in phi_locs:
+            self.ps[phi_loc].phase = np.pi
+
+    def self_config(self, wait_time: float = 0.02):
+        """Self configure the mesh via nullification output port :code:`idx` by phase measurement (PM).
+
+        This method quickly self configures the mesh such that all the light comes out of the top port.
+        This is achieved through phase measurement with active phase sensors, which is the fastest such approach
+        on this chip.
+
+        Args:
+            wait_time: wait time for the phase measurements
+
+        """
+
+        theta_locs, phi_locs = self.output_locs
+
+        self.set_output_transparent()
+        self.to_output()
+        time.sleep(wait_time)
+        idxs = np.arange(4)
+        for idx, theta_loc, phi_loc in zip(idxs[::-1], theta_locs[::-1], phi_locs[::-1]):
+            # get correct phase for theta
+            time.sleep(wait_time)
+            meas_power = self.fractional_left if self.backward else self.fractional_right
+            meas_amplitude = np.sqrt(np.abs(meas_power))
+            theta = 2 * np.arctan2(meas_amplitude[idx + 1], meas_amplitude[idx])
+            # perform phase measurement
+            self.ps[theta_loc].phase = np.pi / 2
+            power = []
+            for i in range(4):
+                self.ps[phi_loc].phase = i * np.pi / 2
+                time.sleep(wait_time)
+                power.append(self.fractional_left if self.backward else self.fractional_right)
+            power = np.asarray(power)
+            time.sleep(wait_time)
+            phi = np.arctan2((power[1, idx + 1] - power[3, idx + 1]),
+                             (power[0, idx + 1] - power[2, idx + 1]))
+
+            # perform the nulling operation
+            self.ps[phi_loc].phase = np.mod(phi, 2 * np.pi)
+            self.ps[theta_loc].phase = np.mod(theta + np.pi, 2 * np.pi)
+
+    @property
+    def output_locs(self):
+        theta_locs = self.network["theta_left"] if self.backward else self.network["theta_right"]
+        phi_locs = self.network["phi_left"] if self.backward else self.network["phi_right"]
+        return theta_locs, phi_locs
+
+    @property
+    def output_from_analyzer(self):
+        """Extract the output of this chip from the current phases of the analyzer.
+
+        Note:
+            It is important you run the `self_config` method before running this.
+
+        Args:
+            coherent_4_alpha: If coherent detection is desired, use an extra dimension.
+
+        Returns:
+
+        """
+        theta_locs, phi_locs = self.output_locs
+        thetas = np.array([self.ps[t].phase for t in theta_locs])
+        phis = np.array([self.ps[p].phase for p in phi_locs])
+
+        if not self.backward:
+            # hack that fixes an unfortunate circuit design error.
+            phis[1] = np.mod(phis[1] + phis[2], 2 * np.pi)
+            phis[2] = np.mod(-phis[2], 2 * np.pi)
+
+        mesh = unbalanced_tree(5)
+        _, _, gammas = mesh.params
+        mesh.params = thetas[::-1], phis[::-1], np.zeros_like(gammas)
+
+        return mesh.matrix()[-1][:5][::-1].conj()
+
+    def coherent_batch(self, vs: np.ndarray, wait_time: float = 0.02, coherent_4_alpha: float = 1):
+        outputs = []
+        for v in vs:
+            self.set_input(np.hstack((v / np.linalg.norm(v), 1)))
+            self.self_config(wait_time)
+            y = self.output_from_analyzer
+            if coherent_4_alpha != 0:
+                y = y[:4] / -np.exp(1j * np.angle(y[-1]))
+                y = y / np.linalg.norm(y)
+            outputs.append(y * np.linalg.norm(v))
+        return np.array(outputs)
+
+    def coherent_matmul(self, u: np.ndarray, v: np.ndarray, coherent_4_alpha: float = 1, wait_time: float = 0.02):
+        """Coherent matrix multiplication :math:`U \\cdot \\boldsymbol{v}` including all phases.
+
+        Note:
+            Only compute the full coherent for :math:`N = 4`. The case for :math:`N = 5` misses a global phase lag
+            though all differential phases can be measured.
+
+        Args:
+            u: unitary matrix to multiply (4 or 5 dimensional)
+            v: vector to multiply
+            coherent_4_alpha: coherent alpha coefficient, the amplitude of the reference channel defined as zero phase.
+            wait_time: Wait time for the power/phase measurements
+
+        Returns:
+            A tuple of the measured and expected result.
+
+        """
+        if not ((v.shape[0] == 4 or v.shape[0] == 5) and (u.shape == (4, 4) or u.shape == (5, 5))):
+            raise AttributeError(f'Require v.shape == 4 or 5 and u.shape == (4, 4) or (5, 5) but got '
+                                 f'v.shape == {v.shape} and u.shape == {u.shape}')
+        v = v / np.linalg.norm(v)
+        expected = u @ v
+
+        if coherent_4_alpha != 0:
+            if not (v.shape[0] == 4 and u.shape == (4, 4)):
+                raise AttributeError(f'Require v.shape == 4 and u.shape == (4, 4) but got '
+                                     f'v.shape == {v.shape} and u.shape == {u.shape}')
+            v = np.hstack((v, coherent_4_alpha))
+            v = v / np.linalg.norm(v)
+
+        self.set_input(v)
+        gammas = self.set_unitary(u)
+        self.self_config(wait_time)
+        y = self.output_from_analyzer
+
+        if coherent_4_alpha != 0:
+            y = y[:4] / -np.exp(1j * np.angle(y[-1]))
+            y = y / np.linalg.norm(y)
+
+        # the reference phases need to be dealt with since they are not implemented on-chip
+        return y * np.exp(1j * gammas), expected
 
     def set_output(self, vector: np.ndarray):
-        return self.set_input(vector, backward=not self.backward)
+        return self.set_input(vector, backward=not self.backward, override_backward=True)
 
     def set_phase(self, ps, phase):
         self.ps[tuple(ps)].phase = phase
@@ -598,8 +740,6 @@ class AMF420Mesh(ActivePhotonicsImager):
                 self.ps[j].phase -= 2 * delta
                 time.sleep(0.1)
                 measurements.append(self.fractional_right)
-
-
 
     def get_unitary_phases(self):
         ts = [self.ps[tuple(t)].phase for t in self.network['theta_mesh']]
