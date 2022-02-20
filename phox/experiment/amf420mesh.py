@@ -573,7 +573,7 @@ class AMF420Mesh(ActivePhotonicsImager):
         _, _, gammas = mesh.params
         mesh.params = thetas[::-1], phis[::-1], np.zeros_like(gammas)
 
-        return mesh.matrix()[-1][:5][::-1].conj()
+        return mesh.matrix()[-1][::-1].conj()
 
     def coherent_batch(self, vs: np.ndarray, wait_time: float = 0.02, coherent_4_alpha: float = 1):
         outputs = []
@@ -583,7 +583,7 @@ class AMF420Mesh(ActivePhotonicsImager):
             y = self.output_from_analyzer
             if coherent_4_alpha != 0:
                 y = y[:4] / -np.exp(1j * np.angle(y[-1]))
-                y = y / np.linalg.norm(y)
+            y = y / np.linalg.norm(y)
             outputs.append(y * np.linalg.norm(v))
         return np.array(outputs)
 

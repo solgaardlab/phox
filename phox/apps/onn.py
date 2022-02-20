@@ -168,12 +168,12 @@ class BackpropAccuracyTest:
         for layer in (1, 2, 3):
             self.chip.set_unitary_phases(self.onn_layers[f'layer{layer}'].thetas, self.onn_layers[f'layer{layer}'].phis)
             self.meas[f'forward_{layer}'] = self.chip.matrix_prop(self.meas[f'input_{layer}'])
+            self.meas[f'input_{layer + 1}'] = np.sqrt(np.abs(self.meas[f'forward_{layer}'][-1][:, :4]))
             if not phase_cheat:
-                self.chip.set_input(np.hstack((self.meas[f'input_{layer}'], 1)))
-                self.meas[f'input_{layer + 1}'] = self.chip.coherent_batch(self.meas[f'input_{layer}'])
+                self.meas[f'forward_out_{layer}'] = self.chip.coherent_batch(self.meas[f'input_{layer}'])
             else:
-                self.meas[f'input_{layer + 1}'] = np.sqrt(np.abs(self.meas[f'forward_{layer}'][-1][:, :4]))
                 self.meas[f'forward_out_{layer}'] = self.pred[f'forward_{layer}'][-1]
+            self.chip.set_output_transparent()
 
     def _backward_measure(self, phase_cheat: bool = False):
         cost_fn = [optical_softmax_cross_entropy(self.y[idx]) for idx in self.idx_list]
@@ -192,6 +192,7 @@ class BackpropAccuracyTest:
                 self.meas[f'backward_out_{layer}'] = self.chip.coherent_batch(self.meas[f'error_{layer}'])
             backward_phasors = np.exp(1j * np.angle(self.meas[f'backward_out_{layer}']))
             self.meas[f'adjoint_{layer}'] = np.sqrt(np.abs(self.meas[f'backward_{layer}'][0][:, :4])) * backward_phasors
+            self.chip.set_output_transparent()
         self.chip.toggle_propagation_direction()
 
     def run(self, phase_cheat: bool = False):
