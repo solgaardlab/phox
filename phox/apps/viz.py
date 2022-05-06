@@ -18,6 +18,7 @@ from dphox.demo import mesh
 from dphox import Pattern
 from scipy.special import softmax
 from simphox.circuit import triangular
+from ..typing import Optional
 
 path_array, ps_array = mesh.demo_polys()
 
@@ -33,7 +34,7 @@ def add_bias(x, p=9, n=4):
 
 def get_planar_dataset_with_circular_bias(dataset_name, test_size=.2):
     if dataset_name == 'moons':
-        X, y = make_moons(noise=0.2, random_state=0, n_samples=250)
+        X, y = make_moons(noise=0.2, random_state=0, n_samples=500)
     elif dataset_name == 'circle':
         X, y = make_circles(noise=0.2, factor=0.5, random_state=1, n_samples=250)
     elif dataset_name == 'blobs':
@@ -90,11 +91,11 @@ light_rdbu = cmap_map(lambda x: 0.5 * x + 0.5, plt.cm.RdBu)
 dark_bwr = cmap_map(lambda x: 0.75 * x, plt.cm.bwr)
 
 
-def plot_planar_boundary(plt, dataset, model, ax=None, grid_points=50):
+def plot_planar_boundary(plt, dataset, model, ax=None, grid_points=50, limit=2.5):
     if ax is None:
         ax = plt.axes()
-    x_min, y_min = -2.5, -2.5
-    x_max, y_max = 2.5, 2.5
+    x_min, y_min = -limit, -limit
+    x_max, y_max = limit, limit
     xx, yy = np.meshgrid(np.linspace(x_min, x_max, grid_points), np.linspace(x_min, x_max, grid_points))
 
     # Predict the function value for the whole grid
@@ -141,9 +142,9 @@ def plot_planar_boundary_from_dataset(plt, dataset, params_list, iteration, ax=N
     return plot_handle
 
 
-def get_onn_contour_data(params_list, iteration, grid_points=50):
-    x_min, y_min = -2.5, -2.5
-    x_max, y_max = 2.5, 2.5
+def get_onn_contour_data(params_list, iteration, grid_points=50, limit=2.5):
+    x_min, y_min = -limit, -limit
+    x_max, y_max = limit, limit
     xx, yy = np.meshgrid(np.linspace(x_min, x_max, grid_points), np.linspace(x_min, x_max, grid_points))
 
     onn_layers = {'layer1': triangular(4),
@@ -176,7 +177,8 @@ def get_onn_contour_data(params_list, iteration, grid_points=50):
 
     return xx, yy, Z
 
-def plot_amf420_powers(ax, power_data, comparison_data=None, comparison_shift=1, cmap='hot'):
+
+def plot_amf420_powers_mesh_only(ax, power_data, comparison_data=None, comparison_shift=1, cmap='hot'):
     start_polys = [0, 0, 2, 4]
     normed_powers = power_data / np.sum(power_data[6])
     if comparison_data is not None:
@@ -213,7 +215,6 @@ def plot_amf420_powers(ax, power_data, comparison_data=None, comparison_shift=1,
         powers = np.hstack((powers, np.hstack([[normed_comparison_powers[r[0], r[1]]] * len(mp)
                                                for r, mp in
                                                zip(np.vstack((locs, left_locs, right_locs)), multipolys)])))
-    # powers = np.sqrt(powers)
 
     wg_patches = PatchCollection(waveguides, cmap=cmap, lw=1, edgecolor='black')
     wg_patches.set_array(np.zeros_like(powers))
@@ -232,7 +233,8 @@ def plot_amf420_powers(ax, power_data, comparison_data=None, comparison_shift=1,
     return p_patches
 
 
-def plot_amf420_backprop_iteration(fig, experiment: dict, iteration: int):
+def plot_amf420_backprop_iteration(fig, experiment: dict, iteration: int, final_iteration: Optional[int] = np.inf):
+    max_iter = min(len(experiment['experiment']), final_iteration)
     subfigs = fig.subfigures(2, 1, height_ratios=[1.75, 1])
     axs = subfigs[0].subplots(4, 3)
     for layer in (1, 2, 3):
@@ -241,8 +243,8 @@ def plot_amf420_backprop_iteration(fig, experiment: dict, iteration: int):
             power_type = ('forward', 'backward', 'sum')[i]
             ax = axs[i, layer - 1]
             data = experiment['experiment'][iteration]
-            im = plot_amf420_powers(ax, data['meas'][f'{power_type}_{layer}'].squeeze()[:11, :4],
-                                    np.abs(data['pred'][f'{power_type}_{layer}'].squeeze()[::2, :4]) ** 2)
+            im = plot_amf420_powers_mesh_only(ax, data['meas'][f'{power_type}_{layer}'].squeeze()[:11, :4],
+                                              np.abs(data['pred'][f'{power_type}_{layer}'].squeeze()[::2, :4]) ** 2)
             ax.set_title(f'{title}{layer}')
             ax.axis('off')
             plt.colorbar(im, ax=ax)
@@ -263,9 +265,10 @@ def plot_amf420_backprop_iteration(fig, experiment: dict, iteration: int):
     # fig.colorbar(im, cax=cbar_ax, label='Waveguide power')
     dataset = Dataset(experiment['X_train'], experiment['y_train'])
     axs = subfigs[1].subplots(1, 2)
-    axs[0].plot([experiment['experiment'][i]['train_loss'] for i in range(1000)], label='train', color='black',
-                linestyle='dotted')
-    axs[0].plot([experiment['experiment'][i]['test_loss'] for i in range(1000)], label='test', color='black')
+    axs[0].plot([experiment['experiment'][i]['train_loss'] for i in range(max_iter)],
+                label='train', color='black', linestyle='dotted')
+    axs[0].plot([experiment['experiment'][i]['test_loss'] for i in range(max_iter)],
+                label='test', color='black')
     axs[0].scatter(iteration, experiment['experiment'][iteration]['train_loss'], color='black')
     axs[0].scatter(iteration, experiment['experiment'][iteration]['test_loss'], color='black')
     axs[0].legend()
@@ -273,3 +276,28 @@ def plot_amf420_backprop_iteration(fig, experiment: dict, iteration: int):
     axs[0].set_ylabel('Cost function $\mathcal{L}$')
     plot_handle = plot_planar_boundary_from_dataset(plt, dataset, experiment['params_list'], iteration, ax=axs[1])
     plt.colorbar(ticks=[0, 0.2, 0.4, 0.6, 0.8, 1], mappable=plot_handle, ax=axs[1])
+
+
+def plot_amf420_powers(ax, power_data, ps_data, cmap='hot', ps_cmap='Greens'):
+    ps_array_reshaped = np.reshape(ps_array, (6, 19, 4, 2))
+    normed_powers = power_data / np.sum(power_data, axis=1)[:, np.newaxis]
+    normed_powers = normed_powers[:, ::-1]
+    waveguides = [Polygon(poly.T) for multipoly in path_array.flatten() for poly in multipoly]
+    phase_shifts = [Polygon(ps_array_reshaped[5 - ps_loc[1], ps_loc[0]]) for ps_loc in ps_data]
+    ps_vals = [ps_data[ps_loc] for ps_loc in ps_data]
+    powers = np.hstack([[normed_powers[c, r]] * len(path_array[r, c]) for r in range(6) for c in range(19)])
+    ps_patches = PatchCollection(phase_shifts, cmap=ps_cmap, lw=1, clim=(0, 2 * np.pi))
+    ps_patches.set_array(ps_vals)
+    ps_patches.set_edgecolor(mpl.cm.Greens(np.array(ps_vals) / (2 * np.pi)))
+    wg_patches = PatchCollection(waveguides, cmap=cmap, lw=0.75, edgecolor='black')
+    wg_patches.set_array(np.zeros_like(powers))
+    p_patches = PatchCollection(waveguides, cmap=cmap, lw=0.25)
+    p_patches.set_array(powers)
+    p_patches.set_edgecolor(mpl.cm.hot(powers))
+    ax.add_collection(ps_patches)
+    ax.add_collection(wg_patches)
+    ax.add_collection(p_patches)
+    b = mesh.bounds
+    ax.set_xlim(b[0] - 2, b[2] + 2)
+    ax.set_ylim(b[1] - 2, b[3] + 2)
+    ax.set_aspect('equal')

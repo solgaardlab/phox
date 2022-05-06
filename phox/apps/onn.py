@@ -84,7 +84,20 @@ def onn(x, y):
     return optical_softmax_cross_entropy(y)(logits)
 
 
+def onn_accuracy(x, y):
+    logits = hk.Sequential([
+        Tri(4, activation=jnp.abs, name='layer1'),
+        Tri(4, activation=jnp.abs, name='layer2'),
+        Tri(4, activation=jnp.abs, name='layer3')
+    ])(x)
+    yhat = optical_softmax(logits)
+    label = yhat.T[1] > yhat.T[0]
+
+    return jnp.sum(jnp.abs(y.T[0] - label)) / y.T[0].size
+
 onn_t = hk.without_apply_rng(hk.transform(onn))
+
+onn_a = hk.without_apply_rng(hk.transform(onn_accuracy))
 
 
 @jax.jit
@@ -162,20 +175,20 @@ class BackpropAccuracyTest:
             self.chip.set_unitary_phases(self.onn_layers[f'layer{layer}'].thetas, self.onn_layers[f'layer{layer}'].phis)
             self.meas[f'sum_{layer}'] = self.chip.matrix_prop(sum_input)
 
-    def _forward_measure(self, phase_cheat: bool = False):
+    def _forward_measure(self, phase_corr: bool = False):
         self.chip.set_transparent()
         self.meas['input_1'] = np.array([self.X[idx] for idx in self.idx_list])
         for layer in (1, 2, 3):
             self.chip.set_unitary_phases(self.onn_layers[f'layer{layer}'].thetas, self.onn_layers[f'layer{layer}'].phis)
             self.meas[f'forward_{layer}'] = self.chip.matrix_prop(self.meas[f'input_{layer}'])
             self.meas[f'input_{layer + 1}'] = np.sqrt(np.abs(self.meas[f'forward_{layer}'][-1][:, :4]))
-            if not phase_cheat:
-                self.meas[f'forward_out_{layer}'] = self.chip.coherent_batch(self.meas[f'input_{layer}'])
-            else:
+            if phase_corr:
                 self.meas[f'forward_out_{layer}'] = self.pred[f'forward_{layer}'][-1]
+            else:
+                self.meas[f'forward_out_{layer}'] = self.chip.coherent_batch(self.meas[f'input_{layer}'])
             self.chip.set_output_transparent()
 
-    def _backward_measure(self, phase_cheat: bool = False):
+    def _backward_measure(self, phase_corr: bool = False):
         cost_fn = [optical_softmax_cross_entropy(self.y[idx]) for idx in self.idx_list]
         self.meas['adjoint_4'] = np.array([jax.grad(cost_fn[i])(self.meas[f'input_4'][i:i + 1, :]).squeeze()
                                            for i in range(len(self.idx_list))])
@@ -186,7 +199,7 @@ class BackpropAccuracyTest:
             self.meas[f'error_{layer}'] = self.meas[f'adjoint_{layer + 1}'].real * forward_phasors
             self.chip.set_unitary_phases(self.onn_layers[f'layer{layer}'].thetas, self.onn_layers[f'layer{layer}'].phis)
             self.meas[f'backward_{layer}'] = self.chip.matrix_prop(self.meas[f'error_{layer}'])
-            if phase_cheat:
+            if phase_corr:
                 self.meas[f'backward_out_{layer}'] = self.pred[f'backward_{layer}'][0]
             else:
                 self.meas[f'backward_out_{layer}'] = self.chip.coherent_batch(self.meas[f'error_{layer}'])
@@ -195,10 +208,10 @@ class BackpropAccuracyTest:
             self.chip.set_output_transparent()
         self.chip.toggle_propagation_direction()
 
-    def run(self, phase_cheat: bool = False):
+    def run(self, phase_corr: bool = False):
         self.chip.reset_control()
-        self._forward_measure(phase_cheat)
-        self._backward_measure(phase_cheat)
+        self._forward_measure(phase_corr)
+        self._backward_measure(phase_corr)
         self._sum_measure()
         self.chip.reset_control()
         self.meas['gradients'] = {f'layer{layer}': extract_gradients_from_powers(
@@ -206,7 +219,6 @@ class BackpropAccuracyTest:
             self.meas[f'backward_{layer}'][:11, :, :4],
             self.meas[f'sum_{layer}'][:11, :, :4]
         ) for layer in (1, 2, 3)}
-
 
 
 #TODO(sunil): fix a lot of boilerplate code.
@@ -305,5 +317,5 @@ def plot_labels(ax, dataset: Dataset, ys: np.ndarray):
     points_y = dataset.X.T[1, :]
     labels = np.array(
         [0 if yi[0] > yi[1] else 1 for yi in np.abs(ys)]).flatten()
-    ax.scatter(points_x, points_y, c=labels, edgecolors='black', linewidths=0.1, s=20, cmap=dark_bwr, alpha=1)
+    ax.scatter(points_x, points_y, c=labels, edgecolors='black', linewidths=0.1, s=10, cmap=dark_bwr, alpha=1)
 

@@ -13,6 +13,8 @@ class NIDAQControl:
         self.system = nidaqmx.system.System.local()
         self.ao_channels = [channel for device in self.system.devices
                             for channel in device.ao_physical_chans]
+        self.ai_channels = [channel for device in self.system.devices
+                            for channel in device.ai_physical_chans]
         self.vmax = vmax
         self.vmin = vmin
 
@@ -68,4 +70,26 @@ class NIDAQControl:
         time.sleep(num_samples / task.timing.samp_clk_rate)
         task.close()
         return num_samples
+
+    def read_chan(self, chan: int, num_voltages: int, n_callback: Optional[Tuple[Callable, int]] = None,
+                  rate: float = 100000, average: bool = True) -> int:
+        """Read voltages from channel
+
+        Args:
+            chan: Channel to write
+            num_voltages: Number of voltages to read
+            n_callback: A tuple of num samples and callback function
+            read_time: Sweep time in seconds
+            rate: Number of voltages read per second
+            average: Whether to average the voltages read out
+
+        Returns:
+            Number of written samples
+
+        """
+        with nidaqmx.Task() as task:
+            task.ai_channels.add_ai_voltage_chan(self.ai_channels[chan].name)
+            task.timing.cfg_samp_clk_timing(rate=rate, sample_mode=AcquisitionType.CONTINUOUS)
+            voltages = task.read(num_voltages)
+        return np.mean(voltages) if average else voltages
 

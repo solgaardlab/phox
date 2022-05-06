@@ -49,14 +49,14 @@ class PhaseCalibration:
             print(f'Trying some more initial conditions... error {error} is >3x more than the tolerable error {tol}')
 
         delta = 0
-        while error > 3 * tol and p0_[-1] < 0:
+        while error > 3 * tol and p0_[-1] < 0 and delta < 2 * np.pi:
             delta += 0.05
             p, pcov = curve_fit(cal_v_power, self.vs, self.lower_split_ratio, p0=(*p0_[:-1], p0_[-1] + delta))
             error = np.sqrt(np.sum(np.diag(pcov)))
 
         delta = 0
         # exhaust some more initial conditions before going to the next step
-        while error > 3 * tol and p0_[-1] > -5:
+        while error > 3 * tol and p0_[-1] > -5 and delta < -2 * np.pi:
             delta -= 0.05
             p, pcov = curve_fit(cal_v_power, self.vs, self.lower_split_ratio, p0=(*p0_[:-1], p0_[-1] + delta))
             error = np.sqrt(np.sum(np.diag(pcov)))
@@ -125,6 +125,9 @@ class PhaseCalibration:
     @property
     def total_out(self) -> np.ndarray:
         return (self.powers[self.idx, 2] + self.powers[self.idx + 1, 2]) / (self.powers[self.idx, 0])
+
+    def raw(self, bottom=False, idx=0) -> np.ndarray:
+        return self.powers[self.idx + bottom, idx]
 
     @property
     def dict(self) -> dict:

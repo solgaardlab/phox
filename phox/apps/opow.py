@@ -4,14 +4,14 @@ import time
 
 
 def psk_hash(input_str):
-    hasher1 = hashlib.sha3_256()
-    hasher1.update(input_str)
+    hasher = hashlib.sha3_256()
+    hasher.update(input_str)
 
     x = np.zeros(64)
     for i in range(0, 64, 2):
         j = i >> 1
-        x[i] = hasher1.digest()[j] >> 4
-        x[i + 1] = hasher1.digest()[j] & 0x0F
+        x[i] = hasher.digest()[j] >> 4
+        x[i + 1] = hasher.digest()[j] & 0x0F
 
     return x, np.array(x) / 16 * 2 * np.pi
 
@@ -35,9 +35,9 @@ def pow_hash_matmul(M, input):
     return x, y
 
 
-def random_lh_matrix(n_vecs, n, num_vals, normed=False, is_complex=False):
+def random_lh_matrix(n_vecs, n, num_vals, normed=False):
     offset = num_vals - 1
-    v = (2 * np.random.randint(num_vals, size=(n_vecs, n)) - offset) + ((2 * np.random.randint(num_vals, size=(n_vecs, n)) - offset) * 1j) * is_complex
+    v = (2 * np.random.randint(num_vals, size=(n_vecs, n)) - offset)
     return v / np.sqrt(np.sum(v ** 2, axis=1)[:, np.newaxis]) if normed else v
 
 
@@ -55,3 +55,8 @@ def svd_demo(chip, u, d, v, x, p=0, wait_time=0.05):
     chip.set_input(np.array((*res, 0)))
     time.sleep(wait_time)
     return np.linalg.norm(res) * np.sqrt(np.maximum(chip.fractional_right[:4], 0))
+
+
+def random_lh_input(n, n_trials, normed=True):
+    v = (2 * np.random.randint(2, size=(n, n_trials)) - 1)
+    return v / np.sqrt(n) if normed else v

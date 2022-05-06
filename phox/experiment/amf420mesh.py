@@ -9,6 +9,7 @@ import panel as pn
 from dphox.demo import mesh, mzi
 from holoviews import opts
 from holoviews.streams import Pipe
+from scipy.linalg import svd, dft
 from scipy.stats import unitary_group
 from simphox.circuit import ForwardMesh, triangular, unbalanced_tree
 from simphox.utils import random_unitary, random_vector
@@ -61,7 +62,30 @@ AMF420MESH_CONFIG = {
              {"grid_loc": (14, 2), "spot_loc": (14, 1), "voltage_channel": 51, "meta_ps": [(11, 1), (15, 2)]},
              {"grid_loc": (6, 3), "spot_loc": (8, 2), "voltage_channel": 21, "meta_ps": [(5, 3), (9, 2)]},
              {"grid_loc": (8, 4), "spot_loc": (10, 3), "voltage_channel": 24, "meta_ps": [(7, 4), (11, 4)]},
-             {"grid_loc": (10, 4), "spot_loc": (10, 3), "voltage_channel": 34, "meta_ps": [(7, 4), (11, 4)]}]}
+             {"grid_loc": (10, 4), "spot_loc": (10, 3), "voltage_channel": 34, "meta_ps": [(7, 4), (11, 4)]}],
+    "phis_parallel": [
+             {"grid_loc": (4, 0), "spot_loc": (4, 0), "voltage_channel": 13, "meta_ps": [(5, 0)]},
+             {"grid_loc": (6, 1), "spot_loc": (6, 1), "voltage_channel": 20, "meta_ps": [(7, 1)]},
+             {"grid_loc": (8, 0), "spot_loc": (8, 0), "voltage_channel": 27, "meta_ps": [(9, 0)]},
+             {"grid_loc": (8, 2), "spot_loc": (8, 2), "voltage_channel": 35, "meta_ps": [(9, 2)]},
+             {"grid_loc": (10, 1), "spot_loc": (10, 1), "voltage_channel": 37, "meta_ps": [(11, 1)]},
+             {"grid_loc": (10, 4), "spot_loc": (10, 3), "voltage_channel": 34, "meta_ps": [(11, 4)]},
+             {"grid_loc": (12, 0), "spot_loc": (12, 0), "voltage_channel": 44, "meta_ps": [(13, 0)]},
+             {"grid_loc": (12, 2), "spot_loc": (12, 2), "voltage_channel": 47, "meta_ps": [(13, 3)]},
+             {"grid_loc": (14, 2), "spot_loc": (14, 1), "voltage_channel": 51, "meta_ps": [(15, 2)]},
+             {"grid_loc": (16, 1), "spot_loc": (16, 0), "voltage_channel": 56, "meta_ps": [(17, 1)]}],
+# "phis_parallel": [
+#              {"grid_loc": (4, 0), "spot_loc": (3, 0), "voltage_channel": 13, "meta_ps": []},
+#              {"grid_loc": (6, 1), "spot_loc": (5, 1), "voltage_channel": 20, "meta_ps": []},
+#              {"grid_loc": (8, 0), "spot_loc": (7, 0), "voltage_channel": 27, "meta_ps": []},
+#              {"grid_loc": (8, 2), "spot_loc": (7, 2), "voltage_channel": 35, "meta_ps": []},
+#              {"grid_loc": (10, 1), "spot_loc": (9, 1), "voltage_channel": 37, "meta_ps": []},
+#              {"grid_loc": (10, 4), "spot_loc": (9, 3), "voltage_channel": 34, "meta_ps": []},
+#              {"grid_loc": (12, 0), "spot_loc": (11, 0), "voltage_channel": 44, "meta_ps": []},
+#              {"grid_loc": (12, 2), "spot_loc": (11, 2), "voltage_channel": 47, "meta_ps": []},
+#              {"grid_loc": (14, 2), "spot_loc": (13, 1), "voltage_channel": 51, "meta_ps": []},
+#              {"grid_loc": (16, 1), "spot_loc": (15, 0), "voltage_channel": 56, "meta_ps": []}]
+}
 
 
 class AMF420Mesh(ActivePhotonicsImager):
@@ -130,7 +154,7 @@ class AMF420Mesh(ActivePhotonicsImager):
             self.stage.wait_until_stopped()
             time.sleep(wait_time)
 
-    def mesh_img(self, n: int, wait_time: float = 0.5, window_size: int = 20):
+    def mesh_img(self, n: int = 6, wait_time: float = 0.5, window_size: int = 20):
         """
 
         Args:
@@ -397,12 +421,31 @@ class AMF420Mesh(ActivePhotonicsImager):
         image_button.on_click(mesh_image)
 
         def read_output(*events):
-            self.read_output(update_mesh=True)
+            self.self_config()
+            self.update_mesh_image()
+
+        def set_dft(*events):
+            self.set_transparent()
+            self.set_dft()
+
+        def dft_basis(i: int):
+            def f(*events):
+                self.set_dft_input(i)
+
+            return f
+
+        button_list = [pn.widgets.Button(name=f'dft{i}', width=25) for i in range(5)]
+        for i, button in enumerate(button_list):
+            button.on_click(dft_basis(i))
+        dft_buttons = pn.Row(*button_list)
+
+        dft_button = pn.widgets.Button(name='Set 4-point DFT')
+        dft_button.on_click(set_dft)
 
         read_button = pn.widgets.Button(name='Self-Configure (Read) Output')
         read_button.on_click(read_output)
 
-        return pn.Column(ps * waveguides * powers * text, pn.Row(image_button, read_button))
+        return pn.Column(ps * waveguides * powers * text, pn.Row(image_button, read_button, dft_button, dft_buttons))
 
     def update_mesh_image(self):
         powers, spots = self.mesh_img(6)
@@ -465,6 +508,22 @@ class AMF420Mesh(ActivePhotonicsImager):
             ps.calibrate(pbar, n_samples=n_samples, wait_time=wait_time)
             ps.phase = 0
 
+    def calibrate_phis_parallel(self, pbar: Optional[Callable] = None, n_samples=20000, wait_time: float = 0):
+        self.reset_control()
+        # since the thetas are calibrated
+        self.set_transparent()
+        self.set_input(np.array((1, 1, 1, 1, 1)))
+        iterator = AMF420MESH_CONFIG["phis_parallel"] if pbar is None else pbar(AMF420MESH_CONFIG["phis_parallel"])
+        grid_locs = [ps['grid_loc'] for ps in AMF420MESH_CONFIG["phis_parallel"]]
+        for ps_cfg in iterator:
+            ps = self.ps[ps_cfg["grid_loc"]]
+            if ps.grid_loc in grid_locs:
+                print(ps.grid_loc)
+                ps.spot_loc = ps_cfg["spot_loc"]
+                ps.meta_ps = ps_cfg["meta_ps"]
+                ps.calibrate(pbar, n_samples=n_samples, wait_time=wait_time)
+                ps.phase = np.pi
+
     def set_input(self, vector: np.ndarray, add_normalization: bool = False, theta_only: bool = False,
                   backward: bool = False, override_backward: bool = False):
         n = 4
@@ -519,27 +578,24 @@ class AMF420Mesh(ActivePhotonicsImager):
         self.to_output()
         time.sleep(wait_time)
         idxs = np.arange(4)
+        meas_power = self.fractional_left[:5]
+        thetas = np.mod(-unbalanced_tree(np.sqrt(np.abs(meas_power).astype(np.complex128))[::-1]).thetas, 2 * np.pi)
         for idx, theta_loc, phi_loc in zip(idxs[::-1], theta_locs[::-1], phi_locs[::-1]):
-            # get correct phase for theta
-            time.sleep(wait_time)
-            meas_power = self.fractional_left if self.backward else self.fractional_right
-            meas_amplitude = np.sqrt(np.abs(meas_power))
-            theta = 2 * np.arctan2(meas_amplitude[idx + 1], meas_amplitude[idx])
             # perform phase measurement
             self.ps[theta_loc].phase = np.pi / 2
             power = []
-            for i in range(4):
+            for i in range(2):
                 self.ps[phi_loc].phase = i * np.pi / 2
                 time.sleep(wait_time)
                 power.append(self.fractional_left if self.backward else self.fractional_right)
             power = np.asarray(power)
             time.sleep(wait_time)
-            phi = np.arctan2((power[1, idx + 1] - power[3, idx + 1]),
-                             (power[0, idx + 1] - power[2, idx + 1]))
+            phi = np.arctan2((power[1, idx + 1] - power[1, idx]),
+                             (power[0, idx + 1] - power[0, idx]))
 
             # perform the nulling operation
             self.ps[phi_loc].phase = np.mod(phi, 2 * np.pi)
-            self.ps[theta_loc].phase = np.mod(theta + np.pi, 2 * np.pi)
+            self.ps[theta_loc].phase = np.mod(thetas[-idx - 1], 2 * np.pi)
 
     @property
     def output_locs(self):
@@ -578,7 +634,7 @@ class AMF420Mesh(ActivePhotonicsImager):
     def coherent_batch(self, vs: np.ndarray, wait_time: float = 0.02, coherent_4_alpha: float = 1):
         outputs = []
         for v in vs:
-            self.set_input(np.hstack((v / np.linalg.norm(v), 1)))
+            self.set_input(np.hstack((v / np.linalg.norm(v), coherent_4_alpha)))
             self.self_config(wait_time)
             y = self.output_from_analyzer
             if coherent_4_alpha != 0:
@@ -587,7 +643,7 @@ class AMF420Mesh(ActivePhotonicsImager):
             outputs.append(y * np.linalg.norm(v))
         return np.array(outputs)
 
-    def coherent_matmul(self, u: np.ndarray, v: np.ndarray, coherent_4_alpha: float = 1, wait_time: float = 0.02):
+    def coherent_matmul(self, u: np.ndarray, v: np.ndarray, coherent_4_alpha: float = 1, wait_time: float = 0.05):
         """Coherent matrix multiplication :math:`U \\cdot \\boldsymbol{v}` including all phases.
 
         Note:
@@ -607,8 +663,9 @@ class AMF420Mesh(ActivePhotonicsImager):
         if not ((v.shape[0] == 4 or v.shape[0] == 5) and (u.shape == (4, 4) or u.shape == (5, 5))):
             raise AttributeError(f'Require v.shape == 4 or 5 and u.shape == (4, 4) or (5, 5) but got '
                                  f'v.shape == {v.shape} and u.shape == {u.shape}')
-        v = v / np.linalg.norm(v)
+        norm = np.linalg.norm(v)
         expected = u @ v
+        v = v / norm
 
         if coherent_4_alpha != 0:
             if not (v.shape[0] == 4 and u.shape == (4, 4)):
@@ -627,7 +684,7 @@ class AMF420Mesh(ActivePhotonicsImager):
             y = y / np.linalg.norm(y)
 
         # the reference phases need to be dealt with since they are not implemented on-chip
-        return y * np.exp(1j * gammas), expected
+        return y * np.exp(1j * gammas) * norm, expected
 
     def set_output(self, vector: np.ndarray):
         return self.set_input(vector, backward=not self.backward, override_backward=True)
@@ -823,16 +880,63 @@ class AMF420Mesh(ActivePhotonicsImager):
             ), spot_panel)
         )
 
-    def svd_proof(self, u, d, v, x):
-        self.set_unitary(v.T)
-        self.set_input(np.array((*x, 0)))
-        time.sleep(0.05)
-        res = np.sqrt(np.maximum(self.fractional_right[:4], 0)) * np.exp(1j * np.angle(v @ x)) * np.linalg.norm(x)
-        res = res * d
-        self.set_unitary(u.T)
-        self.set_input(np.array((*res, 0)))
-        time.sleep(0.05)
-        return np.linalg.norm(res) * np.sqrt(np.maximum(self.fractional_right[:4], 0))
+    def svd_opow(self, q: np.ndarray, x: np.ndarray, p: int = 0, wait_time: float = 0.05, measure_signed: bool = True):
+        """ SVD calculation that uses photonic chip only for unitary matmuls for optical proof of work (oPoW).
+        The error is reduced since only powers from four waveguides need to be measured.
+        Signs of the first matmul are determined using coherent measurement and are usually correct.
+
+        Args:
+            q: The complex matrix to multiply by :math:`\\boldsymbol{x}`.
+            x: The vector to multiply by :math:`Q`.
+            p:  Cyclic shift for hardware-agnostic error correction.
+            wait_time: Wait time for the SVD amplitude measurements.
+            measure_signed: Use the sign rather than the measured phase for the SVD measurement
+
+        Returns:
+            A tuple of the absolute value of the SVD result along with the expected result
+
+        """
+        u, d, v = svd(q)
+        if p > 0:
+            v = np.roll(v, p)
+            u = np.roll(u, p, axis=1)
+            d = np.roll(d, p)
+        self.set_unitary(v)
+        self.set_input(np.array(x))
+        time.sleep(wait_time)
+        res = np.sqrt(np.abs(self.fractional_right[:4])) * np.linalg.norm(x)
+        if measure_signed:  # use coherent measurement to measure signs
+            sign = np.sign(np.real(self.coherent_matmul(v, x, wait_time=wait_time)[0]))
+        else:
+            sign = np.sign(np.real(v @ x))
+        res = res * d * sign
+        self.set_unitary(u)
+        self.set_input(res)
+        self.set_output_transparent()
+        time.sleep(wait_time)
+        return np.linalg.norm(res) * np.sqrt(np.abs(self.fractional_right[:4])), np.abs(q @ x)
+
+    def svd(self, q: np.ndarray, x: np.ndarray, p: int = 0, wait_time: float = 0.05):
+        """ SVD calculation that uses photonic chip for amplitude AND phase measurements (less accurate).
+
+        Args:
+            q: The complex matrix to multiply by :math:`\\boldsymbol{x}`.
+            x: The vector to multiply by :math:`Q`.
+            p: For hardware-agnostic error correction.
+            wait_time: Wait time for all measurements (amplitude and phase calculations).
+
+        Returns:
+
+        """
+        u, d, v = svd(q)
+        if p > 0:
+            v = np.roll(v, p)
+            u = np.roll(u, p, axis=1)
+            d = np.roll(d, p)
+        y = self.coherent_matmul(v, x, wait_time=wait_time)[0]
+        y = np.abs(y) * d * np.sign(y)
+        r = self.coherent_matmul(u, y, wait_time=wait_time)[0]
+        return r, q @ x
 
     def matrix_prop(self, vs: np.ndarray, wait_time: float = 0.03, move_pause: float = 0.2):
         prop_data = []
@@ -851,6 +955,12 @@ class AMF420Mesh(ActivePhotonicsImager):
             prop_data.append(np.stack(prop_col_data))
         prop_data = np.hstack(prop_data)
         return prop_data.transpose((1, 0, 2))
+
+    def set_dft(self):
+        self.set_unitary(dft(4))
+
+    def set_dft_input(self, i: int = 0):
+        self.set_input(dft(4)[i].conj())
 
 
 class PhaseShifter:
