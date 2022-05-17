@@ -2,6 +2,7 @@ from .viz import Dataset, add_bias, light_rdbu, dark_bwr
 from ..experiment.amf420mesh import AMF420Mesh
 import jax
 import jax.numpy as jnp
+from jax import grad
 import optax
 import haiku as hk
 
@@ -13,6 +14,7 @@ from scipy.special import softmax
 
 import time
 import pickle
+import copy
 
 
 PHI_LOCS = [(0, 0), (2, 1), (4, 2), (4, 0), (6, 1), (8, 0)]
@@ -23,19 +25,130 @@ def normalize(x):
     return x / np.linalg.norm(x)
 
 
-def extract_gradients_from_fields(forward, backward):
-    gradients = -(backward * forward).imag
+def extract_gradients_from_powers(forward_p, backward_p, sum_p, scaling=None):
+    scaling = np.ones(sum_p.shape[1]) if scaling is None else scaling
+    gradients = (sum_p - forward_p - backward_p) / 2
     return {
-        'theta': [gradients[tl[0], tl[1]] for tl in THETA_LOCS],
-        'phi': [gradients[pl[0], pl[1]] for pl in PHI_LOCS]
+        'theta': np.array([gradients[tl[0], :, tl[1]] for tl in THETA_LOCS]).T * scaling[:, np.newaxis],
+        'phi': np.array([gradients[pl[0], :, pl[1]] for pl in PHI_LOCS]).T * scaling[:, np.newaxis]
     }
 
 
-def extract_gradients_from_powers(forward_p, backward_p, sum_p):
-    gradients = (sum_p - forward_p - backward_p) / 2
+def extract_gradients_from_fields(forward, backward):
+    gradients = -(backward * forward).imag
     return {
         'theta': np.array([gradients[tl[0], :, tl[1]] for tl in THETA_LOCS]).T,
         'phi': np.array([gradients[pl[0], :, pl[1]] for pl in PHI_LOCS]).T
+    }
+
+
+def extract_gradients_from_sweep(sweep, scaling=None):
+    scaling = np.ones(sweep.shape[1]) if scaling is None else scaling
+    gradients = (sweep[:, :, 0] - np.mean(sweep, axis=2)) / 2
+    return {
+        'theta': np.array([gradients[tl[0], :, tl[1]] for tl in THETA_LOCS]).T * scaling[:, np.newaxis],
+        'phi': np.array([gradients[pl[0], :, pl[1]] for pl in PHI_LOCS]).T * scaling[:, np.newaxis]
+    }
+
+
+def gradient_analog_update_test(chip: AMF420Mesh, sigma: float, u: np.ndarray, include_sweep=True):
+    """An exhaustive test for the analog update scheme in our backprop paper.
+
+    Args:
+        chip: The AMF420 chip to test
+        sigma: The phase error in the unitary
+        u: The unitary to test
+
+    Returns:
+        A dictionary containing the predicted and measured values at every stage of the process.
+
+    """
+    good_mesh = triangular(u)
+
+    bad_mesh = copy.deepcopy(good_mesh)
+    bad_mesh.params = bad_mesh.phases(sigma)
+    uhat = bad_mesh.matrix()
+
+    matrix_fn = bad_mesh.matrix_fn(use_jax=True)
+
+    def loss(u_, n):
+        return lambda params: 1 - jnp.abs((matrix_fn(params) @ u_[n].conj())[n]) ** 2
+
+    gradient = [grad(loss(u, i))(bad_mesh.params) for i in range(4)]
+
+    meas = {}
+
+    chip.set_transparent()
+    chip.set_unitary_phases(bad_mesh.thetas, bad_mesh.phis)
+
+    meas['forward'] = chip.matrix_prop(u.conj())[:, :, :4]
+    meas['forward_output'] = np.sqrt(np.abs(meas['forward'][-1]))
+
+    chip.toggle_propagation_direction()
+    chip.set_transparent()
+    chip.set_unitary_phases(bad_mesh.thetas, bad_mesh.phis)
+
+    meas['backward'] = chip.matrix_prop(np.eye(4, dtype=np.complex128))[:, :, :4]
+    meas['backward_output'] = np.sqrt(np.abs(meas['backward'][0]))
+    chip.set_output_transparent()
+    meas['backward_coherent'] = chip.coherent_batch(np.eye(4, dtype=np.complex128))
+    meas['backward_phase_corr'] = adjoint_signal = meas['backward_output'] * np.exp(1j * np.angle(uhat))
+
+    # note that here we assume we measure the correct phase
+    # (we do not measure it for this test, as we find it introduces an order-of-mag more error)
+    # a full backpropagation demo is still provided in the main text for the 2D classification problem
+    phases = np.angle(np.diag(uhat @ u.T.conj()))
+
+    chip.toggle_propagation_direction()
+    chip.set_transparent()
+    gammas = chip.set_unitary_phases(bad_mesh.thetas, bad_mesh.phis)
+
+    meas['sum_input'] = u.conj() + 1j * adjoint_signal.conj() * np.exp(1j * phases[:, np.newaxis])
+    meas['sum'] = chip.matrix_prop(meas['sum_input'])[:, :, :4]
+
+    meas['gradients'] = extract_gradients_from_powers(meas['forward'], meas['backward'], meas['sum'],
+                                                      2 * np.diag(meas['forward_output']))
+
+    if include_sweep:
+        meas['sweep'] = chip.matrix_prop(np.vstack([
+            u.conj() + 1j * adjoint_signal.conj() * np.exp(1j * (phases[:, np.newaxis] + p))
+            for p in np.linspace(0, 2 * np.pi, 100)
+        ]))
+
+        meas['sweep'] = np.stack(
+            [meas['sweep'][:, ::4, :],
+             meas['sweep'][:, 1::4, :],
+             meas['sweep'][:, 2::4, :],
+             meas['sweep'][:, 3::4, :]], axis=1
+        )
+
+        meas['gradients_sweep'] = extract_gradients_from_sweep(meas['sweep'], 2 * np.diag(meas['forward_output']))
+
+    pred = {}
+    pred['forward'] = bad_mesh.propagate(u.T.conj())
+    pred['forward_output'] = pred['forward'][-1]
+    phases = np.angle(np.diag(uhat @ u.T.conj()))
+    pred['backward'] = bad_mesh.propagate(np.eye(4, dtype=np.complex128), back=True)[::-1]
+    pred['backward_output'] = adjoint_signal = pred['backward'][0]
+    pred['sum_input'] = u.T.conj() + 1j * adjoint_signal.conj() * np.exp(1j * phases[np.newaxis, :])
+    pred['sum'] = bad_mesh.propagate(pred['sum_input'])
+    for t in ('forward', 'backward', 'sum'):
+        pred[t] = pred[t].transpose(0, 2, 1)
+    for t in ('forward_output', 'backward_output', 'sum_input'):
+        pred[t] = pred[t].T
+    pred['gradients'] = extract_gradients_from_powers(np.abs(pred['forward'][::2]) ** 2,
+                                                      np.abs(pred['backward'][::2]) ** 2,
+                                                      np.abs(pred['sum'][::2]) ** 2,
+                                                      2 * np.diag(np.abs(pred['forward_output'])))
+    pred['jax_gradients'] = {'theta': np.vstack([theta for theta, _, _ in gradient]),
+                             'phi': np.vstack([phi for _, phi, _ in gradient])}
+
+    return {
+        'sigma': sigma,
+        'uhat': uhat,
+        'u': u,
+        'meas': meas,
+        'pred': pred
     }
 
 
@@ -116,7 +229,7 @@ def get_update_fn(opt):
     return update
 
 
-def get_gradient_predictions(onn_layers, X, y, idx=0):
+def get_gradient_predictions_onn(onn_layers, X, y, idx=0):
     pred = dict()
     pred['input_1'] = X[idx]
     for layer in (1, 2, 3):
@@ -142,7 +255,7 @@ def get_gradient_predictions(onn_layers, X, y, idx=0):
 
 
 class BackpropAccuracyTest:
-    """This class tests a specific 3-layer photonic neural network.
+    """This class tests a specific 3-layer photonic neural network for 2D classification against digital simulations.
 
     """
     def __init__(self, chip: AMF420Mesh, params_list, X, y, idx_list, iteration, wait_time: float = 0.05):
@@ -162,8 +275,8 @@ class BackpropAccuracyTest:
                 np.mod(params_list[iteration][f'layer{layer}']['phi'], 2 * np.pi),
                 np.mod(params_list[iteration][f'layer{layer}']['gamma'], 2 * np.pi)
             )
-        self.pred = get_gradient_predictions(self.onn_layers, X, y, idx_list[0])
-        pred_list = [get_gradient_predictions(self.onn_layers, X, y, i) for i in idx_list]
+        self.pred = get_gradient_predictions_onn(self.onn_layers, X, y, idx_list[0])
+        pred_list = [get_gradient_predictions_onn(self.onn_layers, X, y, i) for i in idx_list]
         self.pred = {key: np.array([p[key] for p in pred_list]) for key in self.pred}
         for key in self.pred:
             if self.pred[key].ndim == 3:
