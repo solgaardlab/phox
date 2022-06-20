@@ -259,6 +259,7 @@ class XCamera:
             width=640, height=512, show_grid=True, colorbar=True, cmap=cmap,
             shared_axes=False).redim.range(z=(0, 2 ** 15))
         livestream_toggle = pn.widgets.Toggle(name='Livestream', value=False)
+        capture_button = pn.widgets.Button(name='Capture')
         self.livestream_pipe.send(np.fliplr(self.frame().astype(np.float)))
 
         @gen.coroutine
@@ -267,7 +268,7 @@ class XCamera:
 
         cb = PeriodicCallback(update_img, 100)
 
-        def change_livestream(*events):
+        def toggle_livestream(*events):
             for event in events:
                 if event.name == 'value':
                     self.livestream_on = bool(event.new)
@@ -275,16 +276,24 @@ class XCamera:
                         cb.start()
                     else:
                         cb.stop()
+        
+        def capture_frame(*events):
+            for event in events:
+                if event.name == 'value':
+                    self.livestream_pipe.send(np.fliplr(self.frame().astype(np.float)))
 
-        livestream_toggle.param.watch(change_livestream, 'value')
+        livestream_toggle.param.watch(toggle_livestream, 'value')
+        capture_button.param.watch(capture_frame, 'value')
 
         spot_indicator_fn = lambda data: hv.Polygons([{('x', 'y'): hv.Box(640 - s[1], 512 - s[0], (s[3], s[2])).array()}
                                         for s in data]).opts(line_color='blue', fill_color=None, line_width=2)
 
+
+
         spots_dmap = hv.DynamicMap(spot_indicator_fn, streams=[self.spots_indicator_pipe])
 
         return pn.Column((dmap * spots_dmap).opts(shared_axes=False),
-                         livestream_toggle)
+                         pn.Row(livestream_toggle, capture_button))
 
 def _get_grating_spot(img: np.ndarray, center: Tuple[int, int], window_dim: Tuple[int, int]) -> Tuple[np.ndarray, np.ndarray]:
     window = img[center[0] - window_dim[0] // 2:center[0] - window_dim[0] // 2 + window_dim[0],
