@@ -74,44 +74,36 @@ AMF420MESH_CONFIG = {
              {"grid_loc": (12, 2), "spot_loc": (12, 2), "voltage_channel": 47, "meta_ps": [(13, 3)]},
              {"grid_loc": (14, 2), "spot_loc": (14, 1), "voltage_channel": 51, "meta_ps": [(15, 2)]},
              {"grid_loc": (16, 1), "spot_loc": (16, 0), "voltage_channel": 56, "meta_ps": [(17, 1)]}],
-# "phis_parallel": [
-#              {"grid_loc": (4, 0), "spot_loc": (3, 0), "voltage_channel": 13, "meta_ps": []},
-#              {"grid_loc": (6, 1), "spot_loc": (5, 1), "voltage_channel": 20, "meta_ps": []},
-#              {"grid_loc": (8, 0), "spot_loc": (7, 0), "voltage_channel": 27, "meta_ps": []},
-#              {"grid_loc": (8, 2), "spot_loc": (7, 2), "voltage_channel": 35, "meta_ps": []},
-#              {"grid_loc": (10, 1), "spot_loc": (9, 1), "voltage_channel": 37, "meta_ps": []},
-#              {"grid_loc": (10, 4), "spot_loc": (9, 3), "voltage_channel": 34, "meta_ps": []},
-#              {"grid_loc": (12, 0), "spot_loc": (11, 0), "voltage_channel": 44, "meta_ps": []},
-#              {"grid_loc": (12, 2), "spot_loc": (11, 2), "voltage_channel": 47, "meta_ps": []},
-#              {"grid_loc": (14, 2), "spot_loc": (13, 1), "voltage_channel": 51, "meta_ps": []},
-#              {"grid_loc": (16, 1), "spot_loc": (15, 0), "voltage_channel": 56, "meta_ps": []}]
 }
 
 
 class AMF420Mesh(ActivePhotonicsImager):
-    def __init__(self, interlayer_xy: Tuple[float, float], spot_xy: Tuple[int, int], interspot_xy: Tuple[int, int],
-                 ps_calibration: Dict, window_shape: Tuple[int, int] = (15, 10),
+    def __init__(self, interlayer_xy: Tuple[float, float], spot_rowcol: Tuple[int, int], interspot_xy: Tuple[int, int],
+                 ps_calibration: Dict, window_dim: Tuple[int, int] = (15, 10),
                  backward_shift: float = 0.033, home: Tuple[float, float] = (0, 0), stage_port: str = '/dev/ttyUSB1',
                  laser_port: str = '/dev/ttyUSB0', lmm_port: str = None,
                  camera_calibration_filepath: Optional[str] = None, integration_time: int = 20000,
-                 plim: Tuple[float, float] = (0.05, 4.25), vmax: float = 6):
+                 plim: Tuple[float, float] = (0.05, 4.25), vmax: float = 5, mesh_2: bool = False):
         """This class is meant to test our first triangular mesh fabricated in AMF.
-        These chips are 6x6, and they contain
+
+        These chips are 6x6 and contain thermal phase shifters placed strategically to enable arbitrary 4x4
+        coherent matrix multiply operations.
 
         Args:
-            interlayer_xy:
-            spot_xy:
-            interspot_xy:
-            window_shape:
-            backward_shift:
-            home:
-            stage_port:
-            laser_port:
-            lmm_port:
+            interlayer_xy: Interlayer xy stage travel.
+            spot_rowcol: Row, col center of the spot in the frame coordinates (numpy array)
+            interspot_xy: Distance between the various spots on the camera (affected by whether objective is 5x or 10x)
+            window_dim: Dimension of the spot window used.
+            backward_shift: Backward shift for spot imaging in millimeters when sending light backward (33 um for this chip)
+            home: Home location to use for the stage controller.
+            stage_port: Stage serial port (Stage controller for taking images at various parts of the mesh.).
+            laser_port: Laser serial port (Agilent laser).
+            lmm_port: Laser multimeter port for serial control of the laser multimeter (if useful, otherwise use None to ignore).
             camera_calibration_filepath:
-            integration_time:
-            plim:
-            vmax:
+            integration_time: Integration time for the IR camera
+            plim: Phase shift voltage limit for calibration and nulling sweeps.
+            vmax: Maximum voltage limit for any phase shift setting.
+            mesh_2: Use the second mesh by incrementing the voltage channel by 64
         """
         self.network = AMF420MESH_CONFIG['network']
         self.thetas = [PhaseShifter(**ps_dict, mesh=self,
@@ -122,12 +114,19 @@ class AMF420Mesh(ActivePhotonicsImager):
                                   calibration=PhaseCalibration(**ps_calibration[tuple(ps_dict['grid_loc'])])
                                   ) for ps_dict in AMF420MESH_CONFIG['phis']]
         self.phis: Dict[Tuple[int, int], PhaseShifter] = {ps.grid_loc: ps for ps in self.phis}
+        self.mesh_2 = mesh_2
+        if mesh_2:
+            for _, ps in self.thetas.items():
+                ps.voltage_channel += 64
+            for _, ps in self.phis.items():
+                ps.voltage_channel += 64
         self.ps: Dict[Tuple[int, int], PhaseShifter] = {**self.thetas, **self.phis}
         self.interlayer_xy = interlayer_xy
-        self.spot_xy = s = spot_xy
+        self.spot_rowcol = s = spot_rowcol
         self.interspot_xy = ixy = interspot_xy
 
-        self.spots = [(j * ixy[0] + s[0], i * ixy[1] + s[1], window_shape[0], window_shape[1])
+        self.window_dim = window_dim
+        self.spots = [(int(j * ixy[0] + s[0]), int(i * ixy[1] + s[1]), window_dim[0], window_dim[1])
                       for j in range(6) for i in range(3)]
         self.camera = XCamera(integration_time=integration_time, spots=self.spots)
         self.integration_time = integration_time
@@ -149,25 +148,27 @@ class AMF420Mesh(ActivePhotonicsImager):
     def to_layer(self, layer: int, wait_time: float = 0.0):
         if self.layer != (layer, self.backward):
             self.layer = layer, self.backward
-            self.stage.move(x=self.home[0] + self.interlayer_xy[0] * layer,
-                            y=self.home[1] + self.interlayer_xy[1] * layer + self.backward * self.backward_shift)
+            backward_shift = self.backward * self.backward_shift
+            self.stage.move(x=self.home[0] + self.interlayer_xy[0] * layer + backward_shift * self.mesh_2,
+                            y=self.home[1] + self.interlayer_xy[1] * layer + backward_shift * (1 - self.mesh_2))
             self.stage.wait_until_stopped()
             time.sleep(wait_time)
 
-    def mesh_img(self, n: int = 6, wait_time: float = 0.5, window_size: int = 20):
+    def mesh_img(self, n: int = 6, wait_time: float = 0.5, window_dim: Tuple[int, int] = None):
         """
 
         Args:
             n: Number of inputs to the mesh
             wait_time: Wait time after the stage stops moving for things to settle
-            window_size: Window size for the spots
+            window_size: Window size for the spots (use window_dim by default)
 
         Returns:
 
         """
         powers = []
         spots = []
-        s, ixy = self.spot_xy, self.interspot_xy
+        window_dim = self.window_dim if window_dim is None else window_dim
+        s, ixy = self.spot_rowcol, self.interspot_xy
         for m in range(n + 1):
             self.to_layer(3 * m if m < n else 3 * n - 2)
             time.sleep(wait_time)
@@ -175,19 +176,20 @@ class AMF420Mesh(ActivePhotonicsImager):
             if m < n:
                 powers.append(
                     np.hstack([np.vstack([_get_grating_spot(img, center=(j * ixy[0] + s[0], i * ixy[1] + s[1]),
-                                                            window_size=window_size)[0]
+                                                            window_dim=window_dim)[0]
                                           for j in range(n)]) for i in range(3)]))
-                spots.append(np.hstack([np.vstack([_get_grating_spot(img, center=(j * ixy[0] + s[0], i * ixy[1] + s[1]),
-                                                                     window_size=window_size)[1] / np.sum(
-                    powers[-1][:, i])
-                                                   for j in range(n)]) for i in range(3)]))
+                spots.append(np.hstack(
+                    [np.vstack([_get_grating_spot(img, center=(j * ixy[0] + s[0], i * ixy[1] + s[1]),
+                                                  window_dim=window_dim)[1] / np.sum(powers[-1][:, i])
+                                for j in range(n)]) for i in range(3)]))
             else:
                 powers.append(np.vstack([_get_grating_spot(img, center=(j * ixy[0] + s[0], s[1]),
-                                                           window_size=window_size)[0] for j in range(n)]))
+                                                           window_dim=window_dim)[0] for j in range(n)]))
                 spots.append(np.vstack([_get_grating_spot(img, center=(j * ixy[0] + s[0], s[1]),
-                                                          window_size=window_size)[1] / np.sum(powers[-1])
+                                                          window_dim=window_dim)[1] / np.sum(powers[-1])
                                         for j in range(n)]))
-        return np.fliplr(np.hstack(powers[::-1])), np.fliplr(np.hstack(spots[::-1]))
+        direction = 1 if self.mesh_2 else 1
+        return np.fliplr(np.hstack(powers[::-1]))[::direction], np.fliplr(np.hstack(spots[::-1]))[::direction]
 
     def sweep(self, channel: int, layer: int, vlim: Tuple[float, float],
               wait_time: float = 0.0, n_samples: int = 1001, move: bool = True,
@@ -233,7 +235,7 @@ class AMF420Mesh(ActivePhotonicsImager):
 
     def toggle_propagation_direction(self, chan: int = 64):
         self.backward = not self.backward
-        self.control.ttl_toggle(chan)
+        # self.control.ttl_toggle(chan)
 
     def led_panel(self, chan: int = 65):
         return self.control.continuous_slider(chan, name='LED Voltage', vlim=(0, 3))
@@ -434,7 +436,7 @@ class AMF420Mesh(ActivePhotonicsImager):
 
             return f
 
-        button_list = [pn.widgets.Button(name=f'dft{i}', width=25) for i in range(5)]
+        button_list = [pn.widgets.Button(name=f'dft{i}', width=25) for i in range(4)]
         for i, button in enumerate(button_list):
             button.on_click(dft_basis(i))
         dft_buttons = pn.Row(*button_list)
@@ -855,9 +857,70 @@ class AMF420Mesh(ActivePhotonicsImager):
     def fractional_center(self):
         return self.camera.spot_powers[1::3] / np.sum(self.camera.spot_powers[1::3])
 
+    def livestream_panel(self, cmap: float = 'hot'):
+        def change_tuple(name: str, index: int):
+            def change_value(*events):
+                for event in events:
+                    if event.name == 'value':
+                        if name == "spot_rowcol":
+                            src = list(self.spot_rowcol)
+                            src[index] = event.new
+                            self.spot_rowcol = tuple(src)
+                        if name == "window_dim":
+                            wd = list(self.window_dim)
+                            wd[index] = event.new
+                            self.window_dim = tuple(wd)
+                        if name == "interlayer_xy":
+                            inter_xy = list(self.interlayer_xy)
+                            inter_xy[index] = event.new
+                            self.interlayer_xy = tuple(inter_xy)
+                        if name == "interspot_xy":
+                            inters_xy = list(self.interspot_xy)
+                            inters_xy[index] = event.new
+                            self.interspot_xy = tuple(inters_xy)
+                        s = self.spot_rowcol
+                        ixy = self.interspot_xy
+                        self.spots = [(int(j * ixy[0] + s[0]),
+                                       int(i * ixy[1] + s[1]),
+                                       self.window_dim[0], self.window_dim[1])
+                                       for j in range(6) for i in range(3)]
+                        self.camera.spots = self.spots
+                        self.camera.spots_indicator_pipe.send(self.camera.spots)
+            return change_value
+
+
+        spot_row = pn.widgets.IntInput(name='Initial Spot Row', value=self.spot_rowcol[0],
+                                       step=1, start=0, end=640)
+        spot_row.param.watch(change_tuple("spot_rowcol", 0), 'value')
+        spot_col = pn.widgets.IntInput(name='Initial Spot Col', value=self.spot_rowcol[1],
+                                       step=1, start=0, end=512)
+        spot_col.param.watch(change_tuple("spot_rowcol", 1), 'value')
+
+        window_height = pn.widgets.IntInput(name='Initial Window Height', value=self.window_dim[0],
+                                       step=1, start=0, end=50)
+        window_height.param.watch(change_tuple("window_dim", 0), 'value')
+        window_width = pn.widgets.IntInput(name='Initial Window Width', value=self.window_dim[1],
+                                       step=1, start=15, end=50)
+        window_width.param.watch(change_tuple("window_dim", 1), 'value')
+
+        interlayer_x = pn.widgets.FloatInput(name='Initial Interlayer X {mm}', value=self.interlayer_xy[0],
+                                       step=.0001, start=-.01, end=.01)
+        interlayer_x.param.watch(change_tuple("interlayer_xy", 0), 'value')
+        interlayer_y = pn.widgets.FloatInput(name='Initial Interlayer Y {mm}', value=self.interlayer_xy[1],
+                                       step=.0001, start=-.5, end=.5)
+        interlayer_y.param.watch(change_tuple("interlayer_xy", 1), 'value')
+
+        interspot_y = pn.widgets.IntInput(name='Initial Interspot Y {mm}', value=self.interspot_xy[0],
+                                       step=1, start=-100, end=100)
+        interspot_y.param.watch(change_tuple("interspot_xy", 0), 'value')
+        interspot_x = pn.widgets.IntInput(name='Initial Interspot X {mm}', value=self.interspot_xy[1],
+                                       step=1, start=-400, end=400)
+        interspot_x.param.watch(change_tuple("interspot_xy", 1), 'value')
+        return pn.Row(self.camera.livestream_panel(cmap=cmap), pn.Column(spot_row, spot_col, window_width, window_height, interlayer_x, interlayer_y, interspot_x, interspot_y))
+
     def default_panel(self):
         mesh_panel = self.mesh_panel()
-        livestream_panel = self.camera.livestream_panel(cmap='gray')
+        livestream_panel = self.livestream_panel(cmap='gray')
         move_panel = self.stage.move_panel()
         power_panel = self.laser.power_panel()
         spot_panel = self.power_panel()

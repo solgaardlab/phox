@@ -12,7 +12,7 @@ if __name__ == '__main__':
     chip = AMF420Mesh(
         home=(0.0, 0.0),  # mm
         interlayer_xy=(0.0015, -0.3095),  # mm
-        spot_xy=(436, 25),
+        spot_rowcol=(436, 25),
         interspot_xy=(-67, 298),
         stage_port='/dev/ttyUSB2',
         laser_port='/dev/ttyUSB0',

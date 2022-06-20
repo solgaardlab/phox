@@ -37,7 +37,7 @@ class NIDAQControl:
                         task.write(event.new)
         voltage = pn.widgets.FloatSlider(start=vlim[0], end=vlim[1], step=0.01,
                                          value=default_v, name=name, format='1[.]000')
-        voltage.param.watch(change_voltage, 'value')
+        # voltage.param.watch(change_voltage, 'value')
         return voltage
 
     def write_chan(self, chan: int, voltages: np.ndarray, n_callback: Optional[Tuple[Callable, int]] = None,
@@ -71,15 +71,12 @@ class NIDAQControl:
         task.close()
         return num_samples
 
-    def read_chan(self, chan: int, num_voltages: int, n_callback: Optional[Tuple[Callable, int]] = None,
-                  rate: float = 100000, average: bool = True) -> int:
+    def read_chan(self, chan: int, num_voltages: int, rate: float = 100000, average: bool = True) -> int:
         """Read voltages from channel
 
         Args:
             chan: Channel to write
             num_voltages: Number of voltages to read
-            n_callback: A tuple of num samples and callback function
-            read_time: Sweep time in seconds
             rate: Number of voltages read per second
             average: Whether to average the voltages read out
 

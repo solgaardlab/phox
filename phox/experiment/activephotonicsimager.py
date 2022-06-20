@@ -190,8 +190,8 @@ class ActivePhotonicsImager:
 
 
 
-def _get_grating_spot(img: np.ndarray, center: Tuple[int, int], window_size: int) -> Tuple[np.ndarray, np.ndarray]:
-    window = img[center[0] - window_size:center[0] + window_size,
-             center[1] - window_size:center[1] + window_size]
+def _get_grating_spot(img: np.ndarray, center: Tuple[int, int], window_dim: Tuple[int, int]) -> Tuple[np.ndarray, np.ndarray]:
+    window = img[center[0] - window_dim[0] // 2:center[0] - window_dim[0] // 2 + window_dim[0],
+                 center[1] - window_dim[1] // 2:center[1] - window_dim[1] // 2 + window_dim[1]]
     power = np.sum(window)
     return power, window
