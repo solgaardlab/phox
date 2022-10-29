@@ -1,8 +1,9 @@
 # phox
 
-![dphox](https://user-images.githubusercontent.com/7623867/93381618-ca48ed00-f815-11ea-980c-0fff994441a5.png)
+Base repository for simulation and control of photonic devices.
 
-Base repository for simulation and control of photonic devices
+NOTE: this module is fairly raw and at the moment is only meant for replicating results in our papers:
+
 
 ## Installation
 

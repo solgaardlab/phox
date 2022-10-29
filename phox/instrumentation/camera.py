@@ -5,6 +5,7 @@ from collections import Callable
 
 import numpy as np
 import holoviews as hv
+from holoviews import opts
 from holoviews.streams import Pipe
 from numpy.ctypeslib import ndpointer
 from threading import Thread, Lock
@@ -133,7 +134,7 @@ set_property_value_f.restype = ctypes.c_ulong  # ErrCode
 
 class XCamera:
     def __init__(self, name: str = 'cam://0', integration_time: int = 1000,
-                 spots: Optional[List[Tuple[int, int, int, int]]] = None):
+                 spots: Optional[List[Tuple[int, int, int, int]]] = None, flip_spots: bool = False):
         """Xenics Camera (XCamera)
 
         Args:
@@ -153,8 +154,10 @@ class XCamera:
         self.set_integration_time(integration_time)
         self.integration_time = integration_time * 1e-6
         self.livestream_pipe = Pipe(data=[])
+        self.spots_indicator_pipe = Pipe(data=spots)
         self.spots = [] if spots is None else spots
         self.spot_powers = []
+        self.flip_spots = flip_spots
         self.livestream_on = False
         self.power_det_on = False
         self.num_frames = 0
@@ -182,6 +185,8 @@ class XCamera:
             if self.spots is not None:
                 self.spot_powers = np.asarray([_get_grating_spot(frame, (s[0], s[1]), (s[2], s[3]))[0]
                                                for s in self.spots])
+                if self.flip_spots:
+                    self.spot_powers = self.spot_powers[::-1]
             if on_frame is not None:
                 on_frame(frame)
             with self.frame_lock:
@@ -273,11 +278,16 @@ class XCamera:
 
         livestream_toggle.param.watch(change_livestream, 'value')
 
-        return pn.Column(dmap, livestream_toggle)
+        spot_indicator_fn = lambda data: hv.Polygons([{('x', 'y'): hv.Box(640 - s[1], 512 - s[0], (s[3], s[2])).array()}
+                                        for s in data]).opts(line_color='blue', fill_color=None, line_width=2)
 
+        spots_dmap = hv.DynamicMap(spot_indicator_fn, streams=[self.spots_indicator_pipe])
 
-def _get_grating_spot(img: np.ndarray, center: Tuple[int, int], window_size: Tuple[int, int]) -> Tuple[np.ndarray, np.ndarray]:
-    window = img[center[0] - window_size[0]:center[0] + window_size[0],
-                 center[1] - window_size[1]:center[1] + window_size[1]]
+        return pn.Column((dmap * spots_dmap).opts(shared_axes=False),
+                         livestream_toggle)
+
+def _get_grating_spot(img: np.ndarray, center: Tuple[int, int], window_dim: Tuple[int, int]) -> Tuple[np.ndarray, np.ndarray]:
+    window = img[center[0] - window_dim[0] // 2:center[0] - window_dim[0] // 2 + window_dim[0],
+                 center[1] - window_dim[1] // 2:center[1] - window_dim[1] // 2 + window_dim[1]]
     power = np.sum(window)
     return power, window

@@ -9,6 +9,7 @@ import panel as pn
 from dphox.demo import mesh, mzi
 from holoviews import opts
 from holoviews.streams import Pipe
+from scipy.linalg import svd, dft
 from scipy.stats import unitary_group
 from simphox.circuit import ForwardMesh, triangular, unbalanced_tree
 from simphox.utils import random_unitary, random_vector
@@ -61,33 +62,48 @@ AMF420MESH_CONFIG = {
              {"grid_loc": (14, 2), "spot_loc": (14, 1), "voltage_channel": 51, "meta_ps": [(11, 1), (15, 2)]},
              {"grid_loc": (6, 3), "spot_loc": (8, 2), "voltage_channel": 21, "meta_ps": [(5, 3), (9, 2)]},
              {"grid_loc": (8, 4), "spot_loc": (10, 3), "voltage_channel": 24, "meta_ps": [(7, 4), (11, 4)]},
-             {"grid_loc": (10, 4), "spot_loc": (10, 3), "voltage_channel": 34, "meta_ps": [(7, 4), (11, 4)]}]}
+             {"grid_loc": (10, 4), "spot_loc": (10, 3), "voltage_channel": 34, "meta_ps": [(7, 4), (11, 4)]}],
+    "phis_parallel": [
+             {"grid_loc": (4, 0), "spot_loc": (4, 0), "voltage_channel": 13, "meta_ps": [(5, 0)]},
+             {"grid_loc": (6, 1), "spot_loc": (6, 1), "voltage_channel": 20, "meta_ps": [(7, 1)]},
+             {"grid_loc": (8, 0), "spot_loc": (8, 0), "voltage_channel": 27, "meta_ps": [(9, 0)]},
+             {"grid_loc": (8, 2), "spot_loc": (8, 2), "voltage_channel": 35, "meta_ps": [(9, 2)]},
+             {"grid_loc": (10, 1), "spot_loc": (10, 1), "voltage_channel": 37, "meta_ps": [(11, 1)]},
+             {"grid_loc": (10, 4), "spot_loc": (10, 3), "voltage_channel": 34, "meta_ps": [(11, 4)]},
+             {"grid_loc": (12, 0), "spot_loc": (12, 0), "voltage_channel": 44, "meta_ps": [(13, 0)]},
+             {"grid_loc": (12, 2), "spot_loc": (12, 2), "voltage_channel": 47, "meta_ps": [(13, 3)]},
+             {"grid_loc": (14, 2), "spot_loc": (14, 1), "voltage_channel": 51, "meta_ps": [(15, 2)]},
+             {"grid_loc": (16, 1), "spot_loc": (16, 0), "voltage_channel": 56, "meta_ps": [(17, 1)]}],
+}
 
 
 class AMF420Mesh(ActivePhotonicsImager):
-    def __init__(self, interlayer_xy: Tuple[float, float], spot_xy: Tuple[int, int], interspot_xy: Tuple[int, int],
-                 ps_calibration: Dict, window_shape: Tuple[int, int] = (15, 10),
+    def __init__(self, interlayer_xy: Tuple[float, float], spot_rowcol: Tuple[int, int], interspot_xy: Tuple[int, int],
+                 ps_calibration: Dict, window_dim: Tuple[int, int] = (15, 10), pd_calibration: Optional[np.ndarray] = None,
                  backward_shift: float = 0.033, home: Tuple[float, float] = (0, 0), stage_port: str = '/dev/ttyUSB1',
                  laser_port: str = '/dev/ttyUSB0', lmm_port: str = None,
                  camera_calibration_filepath: Optional[str] = None, integration_time: int = 20000,
-                 plim: Tuple[float, float] = (0.05, 4.25), vmax: float = 6):
+                 plim: Tuple[float, float] = (0.05, 4.25), vmax: float = 5, mesh_2: bool = False):
         """This class is meant to test our first triangular mesh fabricated in AMF.
-        These chips are 6x6, and they contain
+
+        These chips are 6x6 and contain thermal phase shifters placed strategically to enable arbitrary 4x4
+        coherent matrix multiply operations.
 
         Args:
-            interlayer_xy:
-            spot_xy:
-            interspot_xy:
-            window_shape:
-            backward_shift:
-            home:
-            stage_port:
-            laser_port:
-            lmm_port:
+            interlayer_xy: Interlayer xy stage travel.
+            spot_rowcol: Row, col center of the spot in the frame coordinates (numpy array)
+            interspot_xy: Distance between the various spots on the camera (affected by whether objective is 5x or 10x)
+            window_dim: Dimension of the spot window used.
+            backward_shift: Backward shift for spot imaging in millimeters when sending light backward (33 um for this chip)
+            home: Home location to use for the stage controller.
+            stage_port: Stage serial port (Stage controller for taking images at various parts of the mesh.).
+            laser_port: Laser serial port (Agilent laser).
+            lmm_port: Laser multimeter port for serial control of the laser multimeter (if useful, otherwise use None to ignore).
             camera_calibration_filepath:
-            integration_time:
-            plim:
-            vmax:
+            integration_time: Integration time for the IR camera
+            plim: Phase shift voltage limit for calibration and nulling sweeps.
+            vmax: Maximum voltage limit for any phase shift setting.
+            mesh_2: Use the second mesh by incrementing the voltage channel by 64
         """
         self.network = AMF420MESH_CONFIG['network']
         self.thetas = [PhaseShifter(**ps_dict, mesh=self,
@@ -98,19 +114,28 @@ class AMF420Mesh(ActivePhotonicsImager):
                                   calibration=PhaseCalibration(**ps_calibration[tuple(ps_dict['grid_loc'])])
                                   ) for ps_dict in AMF420MESH_CONFIG['phis']]
         self.phis: Dict[Tuple[int, int], PhaseShifter] = {ps.grid_loc: ps for ps in self.phis}
+        self.mesh_2 = mesh_2
+        if mesh_2:
+            for _, ps in self.thetas.items():
+                ps.voltage_channel += 64
+            for _, ps in self.phis.items():
+                ps.voltage_channel += 64
         self.ps: Dict[Tuple[int, int], PhaseShifter] = {**self.thetas, **self.phis}
         self.interlayer_xy = interlayer_xy
-        self.spot_xy = s = spot_xy
+        self.spot_rowcol = s = spot_rowcol
         self.interspot_xy = ixy = interspot_xy
+        self.pd_calibration = pd_calibration
+        self.pd_params = [np.polyfit(pd_calibration[i, i], np.linspace(0, 1, 100), 5) for i in range(4)] if pd_calibration is not None else None
 
-        self.spots = [(j * ixy[0] + s[0], i * ixy[1] + s[1], window_shape[0], window_shape[1])
+        self.window_dim = window_dim
+        self.spots = [(int(j * ixy[0] + s[0]), int(i * ixy[1] + s[1]), window_dim[0], window_dim[1])
                       for j in range(6) for i in range(3)]
         self.camera = XCamera(integration_time=integration_time, spots=self.spots)
         self.integration_time = integration_time
         self.backward = False
         self.backward_shift = backward_shift
-        super(AMF420Mesh, self).__init__(home, stage_port, laser_port, lmm_port, camera_calibration_filepath,
-                                         integration_time, plim, vmax)
+        super().__init__(home, stage_port, laser_port, lmm_port, camera_calibration_filepath,
+                         integration_time, plim, vmax)
 
         self.reset_control()
         self.camera.start_frame_loop()
@@ -125,25 +150,27 @@ class AMF420Mesh(ActivePhotonicsImager):
     def to_layer(self, layer: int, wait_time: float = 0.0):
         if self.layer != (layer, self.backward):
             self.layer = layer, self.backward
-            self.stage.move(x=self.home[0] + self.interlayer_xy[0] * layer,
-                            y=self.home[1] + self.interlayer_xy[1] * layer + self.backward * self.backward_shift)
+            backward_shift = self.backward * self.backward_shift
+            self.stage.move(x=self.home[0] + self.interlayer_xy[0] * layer + backward_shift * self.mesh_2,
+                            y=self.home[1] + self.interlayer_xy[1] * layer + backward_shift * (1 - self.mesh_2))
             self.stage.wait_until_stopped()
             time.sleep(wait_time)
 
-    def mesh_img(self, n: int, wait_time: float = 0.5, window_size: int = 20):
+    def mesh_img(self, n: int = 6, wait_time: float = 0.5, window_dim: Tuple[int, int] = None):
         """
 
         Args:
             n: Number of inputs to the mesh
             wait_time: Wait time after the stage stops moving for things to settle
-            window_size: Window size for the spots
+            window_size: Window size for the spots (use window_dim by default)
 
         Returns:
 
         """
         powers = []
         spots = []
-        s, ixy = self.spot_xy, self.interspot_xy
+        window_dim = self.window_dim if window_dim is None else window_dim
+        s, ixy = self.spot_rowcol, self.interspot_xy
         for m in range(n + 1):
             self.to_layer(3 * m if m < n else 3 * n - 2)
             time.sleep(wait_time)
@@ -151,19 +178,20 @@ class AMF420Mesh(ActivePhotonicsImager):
             if m < n:
                 powers.append(
                     np.hstack([np.vstack([_get_grating_spot(img, center=(j * ixy[0] + s[0], i * ixy[1] + s[1]),
-                                                            window_size=window_size)[0]
+                                                            window_dim=window_dim)[0]
                                           for j in range(n)]) for i in range(3)]))
-                spots.append(np.hstack([np.vstack([_get_grating_spot(img, center=(j * ixy[0] + s[0], i * ixy[1] + s[1]),
-                                                                     window_size=window_size)[1] / np.sum(
-                    powers[-1][:, i])
-                                                   for j in range(n)]) for i in range(3)]))
+                spots.append(np.hstack(
+                    [np.vstack([_get_grating_spot(img, center=(j * ixy[0] + s[0], i * ixy[1] + s[1]),
+                                                  window_dim=window_dim)[1] / np.sum(powers[-1][:, i])
+                                for j in range(n)]) for i in range(3)]))
             else:
                 powers.append(np.vstack([_get_grating_spot(img, center=(j * ixy[0] + s[0], s[1]),
-                                                           window_size=window_size)[0] for j in range(n)]))
+                                                           window_dim=window_dim)[0] for j in range(n)]))
                 spots.append(np.vstack([_get_grating_spot(img, center=(j * ixy[0] + s[0], s[1]),
-                                                          window_size=window_size)[1] / np.sum(powers[-1])
+                                                          window_dim=window_dim)[1] / np.sum(powers[-1])
                                         for j in range(n)]))
-        return np.fliplr(np.hstack(powers[::-1])), np.fliplr(np.hstack(spots[::-1]))
+        direction = 1 if self.mesh_2 else 1
+        return np.fliplr(np.hstack(powers[::-1]))[::direction], np.fliplr(np.hstack(spots[::-1]))[::direction]
 
     def sweep(self, channel: int, layer: int, vlim: Tuple[float, float],
               wait_time: float = 0.0, n_samples: int = 1001, move: bool = True,
@@ -209,7 +237,7 @@ class AMF420Mesh(ActivePhotonicsImager):
 
     def toggle_propagation_direction(self, chan: int = 64):
         self.backward = not self.backward
-        self.control.ttl_toggle(chan)
+        # self.control.ttl_toggle(chan)
 
     def led_panel(self, chan: int = 65):
         return self.control.continuous_slider(chan, name='LED Voltage', vlim=(0, 3))
@@ -397,12 +425,31 @@ class AMF420Mesh(ActivePhotonicsImager):
         image_button.on_click(mesh_image)
 
         def read_output(*events):
-            self.read_output(update_mesh=True)
+            self.self_config()
+            self.update_mesh_image()
+
+        def set_dft(*events):
+            self.set_transparent()
+            self.set_dft()
+
+        def dft_basis(i: int):
+            def f(*events):
+                self.set_dft_input(i)
+
+            return f
+
+        button_list = [pn.widgets.Button(name=f'dft{i}', width=25) for i in range(4)]
+        for i, button in enumerate(button_list):
+            button.on_click(dft_basis(i))
+        dft_buttons = pn.Row(*button_list)
+
+        dft_button = pn.widgets.Button(name='Set 4-point DFT')
+        dft_button.on_click(set_dft)
 
         read_button = pn.widgets.Button(name='Self-Configure (Read) Output')
         read_button.on_click(read_output)
 
-        return pn.Column(ps * waveguides * powers * text, pn.Row(image_button, read_button))
+        return pn.Column(ps * waveguides * powers * text, pn.Row(image_button, read_button, dft_button, dft_buttons))
 
     def update_mesh_image(self):
         powers, spots = self.mesh_img(6)
@@ -465,6 +512,22 @@ class AMF420Mesh(ActivePhotonicsImager):
             ps.calibrate(pbar, n_samples=n_samples, wait_time=wait_time)
             ps.phase = 0
 
+    def calibrate_phis_parallel(self, pbar: Optional[Callable] = None, n_samples=20000, wait_time: float = 0):
+        self.reset_control()
+        # since the thetas are calibrated
+        self.set_transparent()
+        self.set_input(np.array((1, 1, 1, 1, 1)))
+        iterator = AMF420MESH_CONFIG["phis_parallel"] if pbar is None else pbar(AMF420MESH_CONFIG["phis_parallel"])
+        grid_locs = [ps['grid_loc'] for ps in AMF420MESH_CONFIG["phis_parallel"]]
+        for ps_cfg in iterator:
+            ps = self.ps[ps_cfg["grid_loc"]]
+            if ps.grid_loc in grid_locs:
+                print(ps.grid_loc)
+                ps.spot_loc = ps_cfg["spot_loc"]
+                ps.meta_ps = ps_cfg["meta_ps"]
+                ps.calibrate(pbar, n_samples=n_samples, wait_time=wait_time)
+                ps.phase = np.pi
+
     def set_input(self, vector: np.ndarray, add_normalization: bool = False, theta_only: bool = False,
                   backward: bool = False, override_backward: bool = False):
         n = 4
@@ -519,27 +582,24 @@ class AMF420Mesh(ActivePhotonicsImager):
         self.to_output()
         time.sleep(wait_time)
         idxs = np.arange(4)
+        meas_power = self.fractional_left[:5]
+        thetas = np.mod(-unbalanced_tree(np.sqrt(np.abs(meas_power).astype(np.complex128))[::-1]).thetas, 2 * np.pi)
         for idx, theta_loc, phi_loc in zip(idxs[::-1], theta_locs[::-1], phi_locs[::-1]):
-            # get correct phase for theta
-            time.sleep(wait_time)
-            meas_power = self.fractional_left if self.backward else self.fractional_right
-            meas_amplitude = np.sqrt(np.abs(meas_power))
-            theta = 2 * np.arctan2(meas_amplitude[idx + 1], meas_amplitude[idx])
             # perform phase measurement
             self.ps[theta_loc].phase = np.pi / 2
             power = []
-            for i in range(4):
+            for i in range(2):
                 self.ps[phi_loc].phase = i * np.pi / 2
                 time.sleep(wait_time)
                 power.append(self.fractional_left if self.backward else self.fractional_right)
             power = np.asarray(power)
             time.sleep(wait_time)
-            phi = np.arctan2((power[1, idx + 1] - power[3, idx + 1]),
-                             (power[0, idx + 1] - power[2, idx + 1]))
+            phi = np.arctan2((power[1, idx + 1] - power[1, idx]),
+                             (power[0, idx + 1] - power[0, idx]))
 
             # perform the nulling operation
             self.ps[phi_loc].phase = np.mod(phi, 2 * np.pi)
-            self.ps[theta_loc].phase = np.mod(theta + np.pi, 2 * np.pi)
+            self.ps[theta_loc].phase = np.mod(thetas[-idx - 1], 2 * np.pi)
 
     @property
     def output_locs(self):
@@ -578,7 +638,7 @@ class AMF420Mesh(ActivePhotonicsImager):
     def coherent_batch(self, vs: np.ndarray, wait_time: float = 0.02, coherent_4_alpha: float = 1):
         outputs = []
         for v in vs:
-            self.set_input(np.hstack((v / np.linalg.norm(v), 1)))
+            self.set_input(np.hstack((v / np.linalg.norm(v), coherent_4_alpha)))
             self.self_config(wait_time)
             y = self.output_from_analyzer
             if coherent_4_alpha != 0:
@@ -587,7 +647,7 @@ class AMF420Mesh(ActivePhotonicsImager):
             outputs.append(y * np.linalg.norm(v))
         return np.array(outputs)
 
-    def coherent_matmul(self, u: np.ndarray, v: np.ndarray, coherent_4_alpha: float = 1, wait_time: float = 0.02):
+    def coherent_matmul(self, u: np.ndarray, v: np.ndarray, coherent_4_alpha: float = 1, wait_time: float = 0.05):
         """Coherent matrix multiplication :math:`U \\cdot \\boldsymbol{v}` including all phases.
 
         Note:
@@ -607,8 +667,9 @@ class AMF420Mesh(ActivePhotonicsImager):
         if not ((v.shape[0] == 4 or v.shape[0] == 5) and (u.shape == (4, 4) or u.shape == (5, 5))):
             raise AttributeError(f'Require v.shape == 4 or 5 and u.shape == (4, 4) or (5, 5) but got '
                                  f'v.shape == {v.shape} and u.shape == {u.shape}')
-        v = v / np.linalg.norm(v)
+        norm = np.linalg.norm(v)
         expected = u @ v
+        v = v / norm
 
         if coherent_4_alpha != 0:
             if not (v.shape[0] == 4 and u.shape == (4, 4)):
@@ -627,7 +688,7 @@ class AMF420Mesh(ActivePhotonicsImager):
             y = y / np.linalg.norm(y)
 
         # the reference phases need to be dealt with since they are not implemented on-chip
-        return y * np.exp(1j * gammas), expected
+        return y * np.exp(1j * gammas) * norm, expected
 
     def set_output(self, vector: np.ndarray):
         return self.set_input(vector, backward=not self.backward, override_backward=True)
@@ -760,17 +821,24 @@ class AMF420Mesh(ActivePhotonicsImager):
         self.calibrate_thetas(pbar)
         self.calibrate_phis(pbar)
 
-    def power_panel(self):
+    def power_panel(self, use_pd: bool = False):
         def power_bars(data):
             return hv.Bars(data, hv.Dimension('Port'), 'Fractional power').opts(ylim=(0, 1))
         dmap = hv.DynamicMap(power_bars, streams=[self.spot_pipe]).opts(shared_axes=False)
         power_toggle = pn.widgets.Toggle(name='Power', value=False)
         lr_toggle = pn.widgets.Toggle(name='Left Spots', value=False)
 
-        @gen.coroutine
-        def update_plot():
-            self.spot_pipe.send([(i, p) for i, p in enumerate(self.fractional_left
-                                                              if lr_toggle.value else self.fractional_right)])
+        if not use_pd:
+            @gen.coroutine
+            def update_plot():
+                self.spot_pipe.send([(i, p) 
+                    for i, p in enumerate(self.fractional_left
+                    if lr_toggle.value else self.fractional_right)
+                ])
+        else:
+            @gen.coroutine
+            def update_plot():
+                self.spot_pipe.send([(i, p) for i, p in enumerate(self.output_pd)])
         cb = PeriodicCallback(update_plot, 100)
 
         def change_power(*events):
@@ -797,13 +865,96 @@ class AMF420Mesh(ActivePhotonicsImager):
     @property
     def fractional_center(self):
         return self.camera.spot_powers[1::3] / np.sum(self.camera.spot_powers[1::3])
+    
+    @property
+    def output_pd(self):
+        raw = np.mean(self.control.meas_buffer, axis=1)
+        fit = np.abs(np.array([np.polyval(self.pd_params[i], raw[i]) for i in range(4)]))
+        return fit / np.sum(fit)
+
+    def pd_calibrate(self, pbar=None):
+        self.set_transparent()
+        calibration_values = []
+        ps = np.linspace(0, 1, 100)
+        for i in range(4):
+            calibration_values_i = []
+            time.sleep(2)
+            iterator = ps if pbar is None else pbar(ps)
+            for p in iterator:
+                self.set_input(np.sqrt(np.hstack((np.eye(4)[i] * p, 1 - p))))
+                time.sleep(0.1)
+                calibration_values_i.append(np.mean(self.control.meas_buffer, axis=1))
+            calibration_values.append(calibration_values_i)
+        self.pd_calibration = np.array(calibration_values).transpose((0, 2, 1))
+        self.pd_params = [np.polyfit(self.pd_calibration[i, i], np.linspace(0, 1, 100), 5) for i in range(4)]
+
+    def livestream_panel(self, cmap: float = 'hot'):
+        def change_tuple(name: str, index: int):
+            def change_value(*events):
+                for event in events:
+                    if event.name == 'value':
+                        if name == "spot_rowcol":
+                            src = list(self.spot_rowcol)
+                            src[index] = event.new
+                            self.spot_rowcol = tuple(src)
+                        if name == "window_dim":
+                            wd = list(self.window_dim)
+                            wd[index] = event.new
+                            self.window_dim = tuple(wd)
+                        if name == "interlayer_xy":
+                            inter_xy = list(self.interlayer_xy)
+                            inter_xy[index] = event.new
+                            self.interlayer_xy = tuple(inter_xy)
+                        if name == "interspot_xy":
+                            inters_xy = list(self.interspot_xy)
+                            inters_xy[index] = event.new
+                            self.interspot_xy = tuple(inters_xy)
+                        s = self.spot_rowcol
+                        ixy = self.interspot_xy
+                        self.spots = [(int(j * ixy[0] + s[0]),
+                                       int(i * ixy[1] + s[1]),
+                                       self.window_dim[0], self.window_dim[1])
+                                       for j in range(6) for i in range(3)]
+                        self.camera.spots = self.spots
+                        self.camera.spots_indicator_pipe.send(self.camera.spots)
+            return change_value
+
+
+        spot_row = pn.widgets.IntInput(name='Initial Spot Row', value=self.spot_rowcol[0],
+                                       step=1, start=0, end=640)
+        spot_row.param.watch(change_tuple("spot_rowcol", 0), 'value')
+        spot_col = pn.widgets.IntInput(name='Initial Spot Col', value=self.spot_rowcol[1],
+                                       step=1, start=0, end=512)
+        spot_col.param.watch(change_tuple("spot_rowcol", 1), 'value')
+
+        window_height = pn.widgets.IntInput(name='Initial Window Height', value=self.window_dim[0],
+                                       step=1, start=0, end=50)
+        window_height.param.watch(change_tuple("window_dim", 0), 'value')
+        window_width = pn.widgets.IntInput(name='Initial Window Width', value=self.window_dim[1],
+                                       step=1, start=15, end=50)
+        window_width.param.watch(change_tuple("window_dim", 1), 'value')
+
+        interlayer_x = pn.widgets.FloatInput(name='Initial Interlayer X {mm}', value=self.interlayer_xy[0],
+                                       step=.0001, start=-.01, end=.01)
+        interlayer_x.param.watch(change_tuple("interlayer_xy", 0), 'value')
+        interlayer_y = pn.widgets.FloatInput(name='Initial Interlayer Y {mm}', value=self.interlayer_xy[1],
+                                       step=.0001, start=-.5, end=.5)
+        interlayer_y.param.watch(change_tuple("interlayer_xy", 1), 'value')
+
+        interspot_y = pn.widgets.IntInput(name='Initial Interspot Y {mm}', value=self.interspot_xy[0],
+                                       step=1, start=-100, end=100)
+        interspot_y.param.watch(change_tuple("interspot_xy", 0), 'value')
+        interspot_x = pn.widgets.IntInput(name='Initial Interspot X {mm}', value=self.interspot_xy[1],
+                                       step=1, start=-400, end=400)
+        interspot_x.param.watch(change_tuple("interspot_xy", 1), 'value')
+        return pn.Row(self.camera.livestream_panel(cmap=cmap), pn.Column(spot_row, spot_col, window_width, window_height, interlayer_x, interlayer_y, interspot_x, interspot_y))
 
     def default_panel(self):
         mesh_panel = self.mesh_panel()
-        livestream_panel = self.camera.livestream_panel(cmap='gray')
+        livestream_panel = self.livestream_panel(cmap='gray')
         move_panel = self.stage.move_panel()
         power_panel = self.laser.power_panel()
-        spot_panel = self.power_panel()
+        spot_panel = self.power_panel() # use_pd=(self.pd_calibration is not None)
         wavelength_panel = self.laser.wavelength_panel()
         led_panel = self.led_panel()
         home_panel = self.home_panel()
@@ -823,16 +974,63 @@ class AMF420Mesh(ActivePhotonicsImager):
             ), spot_panel)
         )
 
-    def svd_proof(self, u, d, v, x):
-        self.set_unitary(v.T)
-        self.set_input(np.array((*x, 0)))
-        time.sleep(0.05)
-        res = np.sqrt(np.maximum(self.fractional_right[:4], 0)) * np.exp(1j * np.angle(v @ x)) * np.linalg.norm(x)
-        res = res * d
-        self.set_unitary(u.T)
-        self.set_input(np.array((*res, 0)))
-        time.sleep(0.05)
-        return np.linalg.norm(res) * np.sqrt(np.maximum(self.fractional_right[:4], 0))
+    def svd_opow(self, q: np.ndarray, x: np.ndarray, p: int = 0, wait_time: float = 0.05, measure_signed: bool = True):
+        """ SVD calculation that uses photonic chip only for unitary matmuls for optical proof of work (oPoW).
+        The error is reduced since only powers from four waveguides need to be measured.
+        Signs of the first matmul are determined using coherent measurement and are usually correct.
+
+        Args:
+            q: The complex matrix to multiply by :math:`\\boldsymbol{x}`.
+            x: The vector to multiply by :math:`Q`.
+            p:  Cyclic shift for hardware-agnostic error correction.
+            wait_time: Wait time for the SVD amplitude measurements.
+            measure_signed: Use the sign rather than the measured phase for the SVD measurement
+
+        Returns:
+            A tuple of the absolute value of the SVD result along with the expected result
+
+        """
+        u, d, v = svd(q)
+        if p > 0:
+            v = np.roll(v, p)
+            u = np.roll(u, p, axis=1)
+            d = np.roll(d, p)
+        self.set_unitary(v)
+        self.set_input(np.array(x))
+        time.sleep(wait_time)
+        res = np.sqrt(np.abs(self.fractional_right[:4])) * np.linalg.norm(x)
+        if measure_signed:  # use coherent measurement to measure signs
+            sign = np.sign(np.real(self.coherent_matmul(v, x, wait_time=wait_time)[0]))
+        else:
+            sign = np.sign(np.real(v @ x))
+        res = res * d * sign
+        self.set_unitary(u)
+        self.set_input(res)
+        self.set_output_transparent()
+        time.sleep(wait_time)
+        return np.linalg.norm(res) * np.sqrt(np.abs(self.fractional_right[:4])), np.abs(q @ x)
+
+    def svd(self, q: np.ndarray, x: np.ndarray, p: int = 0, wait_time: float = 0.05):
+        """ SVD calculation that uses photonic chip for amplitude AND phase measurements (less accurate).
+
+        Args:
+            q: The complex matrix to multiply by :math:`\\boldsymbol{x}`.
+            x: The vector to multiply by :math:`Q`.
+            p: For hardware-agnostic error correction.
+            wait_time: Wait time for all measurements (amplitude and phase calculations).
+
+        Returns:
+
+        """
+        u, d, v = svd(q)
+        if p > 0:
+            v = np.roll(v, p)
+            u = np.roll(u, p, axis=1)
+            d = np.roll(d, p)
+        y = self.coherent_matmul(v, x, wait_time=wait_time)[0]
+        y = np.abs(y) * d * np.sign(y)
+        r = self.coherent_matmul(u, y, wait_time=wait_time)[0]
+        return r, q @ x
 
     def matrix_prop(self, vs: np.ndarray, wait_time: float = 0.03, move_pause: float = 0.2):
         prop_data = []
@@ -851,6 +1049,12 @@ class AMF420Mesh(ActivePhotonicsImager):
             prop_data.append(np.stack(prop_col_data))
         prop_data = np.hstack(prop_data)
         return prop_data.transpose((1, 0, 2))
+
+    def set_dft(self):
+        self.set_unitary(dft(4))
+
+    def set_dft_input(self, i: int = 0):
+        self.set_input(dft(4)[i].conj())
 
 
 class PhaseShifter:
