@@ -12,7 +12,11 @@ if __name__ == '__main__':
     chip = AMF420Mesh(
         home=(0.0, 0.0),  # mm
         interlayer_xy=(0.0015, -0.3095),  # mm
+<<<<<<< HEAD:.ipynb_checkpoints/serve_amf420-checkpoint.py
         spot_xy=(436, 25),
+=======
+        spot_rowcol=(436, 25),
+>>>>>>> 5dddfbef682aefac8e625e90e101b0d74a87f167:serve_amf420.py
         interspot_xy=(-67, 298),
         stage_port='/dev/ttyUSB2',
         laser_port='/dev/ttyUSB0',

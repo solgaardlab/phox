@@ -949,6 +949,67 @@ class AMF420Mesh(ActivePhotonicsImager):
         interspot_x.param.watch(change_tuple("interspot_xy", 1), 'value')
         return pn.Row(self.camera.livestream_panel(cmap=cmap), pn.Column(spot_row, spot_col, window_width, window_height, interlayer_x, interlayer_y, interspot_x, interspot_y))
 
+    def livestream_panel(self, cmap: float = 'hot'):
+        def change_tuple(name: str, index: int):
+            def change_value(*events):
+                for event in events:
+                    if event.name == 'value':
+                        if name == "spot_rowcol":
+                            src = list(self.spot_rowcol)
+                            src[index] = event.new
+                            self.spot_rowcol = tuple(src)
+                        if name == "window_dim":
+                            wd = list(self.window_dim)
+                            wd[index] = event.new
+                            self.window_dim = tuple(wd)
+                        if name == "interlayer_xy":
+                            inter_xy = list(self.interlayer_xy)
+                            inter_xy[index] = event.new
+                            self.interlayer_xy = tuple(inter_xy)
+                        if name == "interspot_xy":
+                            inters_xy = list(self.interspot_xy)
+                            inters_xy[index] = event.new
+                            self.interspot_xy = tuple(inters_xy)
+                        s = self.spot_rowcol
+                        ixy = self.interspot_xy
+                        self.spots = [(int(j * ixy[0] + s[0]),
+                                       int(i * ixy[1] + s[1]),
+                                       self.window_dim[0], self.window_dim[1])
+                                       for j in range(6) for i in range(3)]
+                        self.camera.spots = self.spots
+                        self.camera.spots_indicator_pipe.send(self.camera.spots)
+            return change_value
+
+
+        spot_row = pn.widgets.IntInput(name='Initial Spot Row', value=self.spot_rowcol[0],
+                                       step=1, start=0, end=640)
+        spot_row.param.watch(change_tuple("spot_rowcol", 0), 'value')
+        spot_col = pn.widgets.IntInput(name='Initial Spot Col', value=self.spot_rowcol[1],
+                                       step=1, start=0, end=512)
+        spot_col.param.watch(change_tuple("spot_rowcol", 1), 'value')
+
+        window_height = pn.widgets.IntInput(name='Initial Window Height', value=self.window_dim[0],
+                                       step=1, start=0, end=50)
+        window_height.param.watch(change_tuple("window_dim", 0), 'value')
+        window_width = pn.widgets.IntInput(name='Initial Window Width', value=self.window_dim[1],
+                                       step=1, start=15, end=50)
+        window_width.param.watch(change_tuple("window_dim", 1), 'value')
+
+        interlayer_x = pn.widgets.FloatInput(name='Initial Interlayer X {mm}', value=self.interlayer_xy[0],
+                                       step=.0001, start=-.01, end=.01)
+        interlayer_x.param.watch(change_tuple("interlayer_xy", 0), 'value')
+        interlayer_y = pn.widgets.FloatInput(name='Initial Interlayer Y {mm}', value=self.interlayer_xy[1],
+                                       step=.0001, start=-.5, end=.5)
+        interlayer_y.param.watch(change_tuple("interlayer_xy", 1), 'value')
+
+        interspot_y = pn.widgets.IntInput(name='Initial Interspot Y {mm}', value=self.interspot_xy[0],
+                                       step=1, start=-100, end=100)
+        interspot_y.param.watch(change_tuple("interspot_xy", 0), 'value')
+        interspot_x = pn.widgets.IntInput(name='Initial Interspot X {mm}', value=self.interspot_xy[1],
+                                       step=1, start=-400, end=400)
+        interspot_x.param.watch(change_tuple("interspot_xy", 1), 'value')
+        return pn.Row(self.camera.livestream_panel(cmap=cmap), pn.Column(spot_row, spot_col, window_width, window_height, interlayer_x, interlayer_y, interspot_x, interspot_y))
+
     def default_panel(self):
         mesh_panel = self.mesh_panel()
         livestream_panel = self.livestream_panel(cmap='gray')
