@@ -9,7 +9,7 @@ import haiku as hk
 from simphox.circuit import triangular
 
 import numpy as np
-from tensorflow.keras import Model
+from keras import Model
 from scipy.special import softmax
 
 import time
@@ -51,7 +51,15 @@ def extract_gradients_from_sweep(sweep, scaling=None):
     }
 
 
-def gradient_analog_update_test(chip: AMF420Mesh, sigma: float, u: np.ndarray, include_sweep=True):
+def extract_gradients_from_toggle(toggle, scaling=None):
+    scaling = np.ones(toggle.shape[1]) if scaling is None else scaling
+    gradients = (np.mean(np.abs(toggle - np.mean(toggle, axis=2)[..., np.newaxis]), axis=2)) / 2
+    return {
+        'theta': np.array([gradients[tl[0], :, tl[1]] for tl in THETA_LOCS]).T * scaling[:, np.newaxis],
+        'phi': np.array([gradients[pl[0], :, pl[1]] for pl in PHI_LOCS]).T * scaling[:, np.newaxis]
+    }
+
+def gradient_analog_update_test(chip: AMF420Mesh, sigma: float, u: np.ndarray, include_sweep=False, include_toggle=True, include_meas=True):
     """An exhaustive test for the analog update scheme in our backprop paper.
 
     Args:
@@ -76,53 +84,70 @@ def gradient_analog_update_test(chip: AMF420Mesh, sigma: float, u: np.ndarray, i
 
     gradient = [grad(loss(u, i))(bad_mesh.params) for i in range(4)]
 
-    meas = {}
+    if include_meas:
+        meas = {}
 
-    chip.set_transparent()
-    chip.set_unitary_phases(bad_mesh.thetas, bad_mesh.phis)
+        chip.set_transparent()
+        chip.set_unitary_phases(bad_mesh.thetas, bad_mesh.phis)
 
-    meas['forward'] = chip.matrix_prop(u.conj())[:, :, :4]
-    meas['forward_output'] = np.sqrt(np.abs(meas['forward'][-1]))
+        meas['forward'] = chip.matrix_prop(u.conj())[:, :, :4]
+        chip.set_output_transparent()
+        meas['forward_coherent'] = chip.coherent_batch(u.conj(), wait_time=0.1, coherent_4_alpha=1) * np.exp(1j * bad_mesh.gammas)
+        meas['forward_output'] = np.sqrt(np.abs(meas['forward'][-1]))
 
-    chip.toggle_propagation_direction()
-    chip.set_transparent()
-    chip.set_unitary_phases(bad_mesh.thetas, bad_mesh.phis)
+        chip.toggle_propagation_direction()
+        chip.set_transparent()
+        chip.set_unitary_phases(bad_mesh.thetas, bad_mesh.phis)
 
-    meas['backward'] = chip.matrix_prop(np.eye(4, dtype=np.complex128))[:, :, :4]
-    meas['backward_output'] = np.sqrt(np.abs(meas['backward'][0]))
-    chip.set_output_transparent()
-    meas['backward_coherent'] = chip.coherent_batch(np.eye(4, dtype=np.complex128))
-    meas['backward_phase_corr'] = adjoint_signal = meas['backward_output'] * np.exp(1j * np.angle(uhat))
+        # note that here we assume we measure the correct phase
+        # (we do not measure it for this test, as we find it introduces an order-of-mag more error)
+        # a full backpropagation demo is still provided in the main text for the 2D classification problem
+        phases = np.angle(np.diag(uhat @ u.T.conj()))
 
-    # note that here we assume we measure the correct phase
-    # (we do not measure it for this test, as we find it introduces an order-of-mag more error)
-    # a full backpropagation demo is still provided in the main text for the 2D classification problem
-    phases = np.angle(np.diag(uhat @ u.T.conj()))
+        meas['backward'] = chip.matrix_prop(np.eye(4, dtype=np.complex128))[:, :, :4]
+        meas['backward_output'] = np.sqrt(np.abs(meas['backward'][0]))
+        meas['backward_phase_corr'] = adjoint_signal = meas['backward_output'] * np.exp(1j * np.angle(uhat))
 
-    chip.toggle_propagation_direction()
-    chip.set_transparent()
-    gammas = chip.set_unitary_phases(bad_mesh.thetas, bad_mesh.phis)
+        chip.toggle_propagation_direction()
+        chip.set_transparent()
+        gammas = chip.set_unitary_phases(bad_mesh.thetas, bad_mesh.phis)
 
-    meas['sum_input'] = u.conj() + 1j * adjoint_signal.conj() * np.exp(1j * phases[:, np.newaxis])
-    meas['sum'] = chip.matrix_prop(meas['sum_input'])[:, :, :4]
+        meas['sum_input'] = u.conj() + 1j * adjoint_signal.conj() * np.exp(1j * phases[:, np.newaxis])
+        meas['sum'] = chip.matrix_prop(meas['sum_input'])[:, :, :4]
 
-    meas['gradients'] = extract_gradients_from_powers(meas['forward'], meas['backward'], meas['sum'],
-                                                      2 * np.diag(meas['forward_output']))
+        meas['gradients'] = extract_gradients_from_powers(meas['forward'], meas['backward'], meas['sum'],
+                                                          2 * np.diag(meas['forward_output']))
+        meas['diff_input'] = u.conj() - 1j * adjoint_signal.conj() * np.exp(1j * phases[:, np.newaxis])
+        meas['diff'] = chip.matrix_prop(meas['diff_input'])[:, :, :4]
+        meas['gradients_analog'] = extract_gradients_from_powers(meas['diff'], np.zeros_like(meas['diff']), meas['sum'],
+                                                         np.diag(meas['forward_output']))
 
-    if include_sweep:
-        meas['sweep'] = chip.matrix_prop(np.vstack([
-            u.conj() + 1j * adjoint_signal.conj() * np.exp(1j * (phases[:, np.newaxis] + p))
-            for p in np.linspace(0, 2 * np.pi, 100)
-        ]))
+        if include_sweep:
+            meas['sweep'] = chip.matrix_prop(np.vstack([
+                u.conj() + 1j * adjoint_signal.conj() * np.exp(1j * (phases[:, np.newaxis] + p))
+                for p in np.linspace(0, 2 * np.pi, 100)
+            ]))
 
-        meas['sweep'] = np.stack(
-            [meas['sweep'][:, ::4, :],
-             meas['sweep'][:, 1::4, :],
-             meas['sweep'][:, 2::4, :],
-             meas['sweep'][:, 3::4, :]], axis=1
-        )
+            meas['sweep'] = np.stack(
+                [meas['sweep'][:, ::4, :],
+                 meas['sweep'][:, 1::4, :],
+                 meas['sweep'][:, 2::4, :],
+                 meas['sweep'][:, 3::4, :]], axis=1
+            )
 
-        meas['gradients_sweep'] = extract_gradients_from_sweep(meas['sweep'], 2 * np.diag(meas['forward_output']))
+            meas['gradients_sweep'] = extract_gradients_from_sweep(meas['sweep'], 2 * np.diag(meas['forward_output']))
+        if include_toggle:
+            meas['toggle'] = chip.matrix_prop(np.vstack([
+                u.conj() + 1j * adjoint_signal.conj() * np.exp(1j * (phases[:, np.newaxis] + p))
+                for p in np.hstack([np.zeros(10), np.ones(10) * np.pi] * 5)
+            ]))
+
+            meas['toggle_interleave'] = np.stack(
+                [meas['toggle'][:, ::4, :],
+                 meas['toggle'][:, 1::4, :],
+                 meas['toggle'][:, 2::4, :],
+                 meas['toggle'][:, 3::4, :]], axis=1
+            )
 
     pred = {}
     pred['forward'] = bad_mesh.propagate(u.T.conj())
@@ -147,7 +172,7 @@ def gradient_analog_update_test(chip: AMF420Mesh, sigma: float, u: np.ndarray, i
         'sigma': sigma,
         'uhat': uhat,
         'u': u,
-        'meas': meas,
+        'meas': meas if include_meas else None,
         'pred': pred
     }
 

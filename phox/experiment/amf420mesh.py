@@ -83,7 +83,7 @@ class AMF420Mesh(ActivePhotonicsImager):
                  backward_shift: float = 0.033, home: Tuple[float, float] = (0, 0), stage_port: str = '/dev/ttyUSB1',
                  laser_port: str = '/dev/ttyUSB0', lmm_port: str = None,
                  camera_calibration_filepath: Optional[str] = None, integration_time: int = 20000,
-                 plim: Tuple[float, float] = (0.05, 4.25), vmax: float = 5, mesh_2: bool = False):
+                 plim: Tuple[float, float] = (0.05, 4.25), vmax: float = 5, mesh_2: bool = False, broken_ps = None):
         """This class is meant to test our first triangular mesh fabricated in AMF.
 
         These chips are 6x6 and contain thermal phase shifters placed strategically to enable arbitrary 4x4
@@ -104,6 +104,7 @@ class AMF420Mesh(ActivePhotonicsImager):
             plim: Phase shift voltage limit for calibration and nulling sweeps.
             vmax: Maximum voltage limit for any phase shift setting.
             mesh_2: Use the second mesh by incrementing the voltage channel by 64
+            broken_ps: Specify the broken phase shifters
         """
         self.network = AMF420MESH_CONFIG['network']
         self.thetas = [PhaseShifter(**ps_dict, mesh=self,
@@ -146,6 +147,19 @@ class AMF420Mesh(ActivePhotonicsImager):
         self.spot_pipe = Pipe(data=[(i, 0) for i in range(6)])
         time.sleep(0.1)
         self.layer = (0, False)
+        
+        """
+        self.broken_ps = broken_ps
+        ## remove the controls in theta/phi list
+        if self.broken_ps is not None:
+            for kk in self.thetas.keys():
+                if kk in self.broken_ps:
+                    del self.thetas[kk]
+            for kk in self.phis.keys():
+                if kk in self.broken_ps:
+                    del self.phis[kk]
+        """
+            
 
     def to_layer(self, layer: int, wait_time: float = 0.0):
         if self.layer != (layer, self.backward):
@@ -227,7 +241,7 @@ class AMF420Mesh(ActivePhotonicsImager):
         for ps in self.ps:
             self.control.write_chan(self.ps[ps].voltage_channel, vmin)
 
-    def propagation_toggle_panel(self, chan: int = 64):
+    def propagation_toggle_panel(self, chan: int = 96):
         def toggle(*events):
             self.toggle_propagation_direction(chan)
 
@@ -235,11 +249,11 @@ class AMF420Mesh(ActivePhotonicsImager):
         button.on_click(toggle)
         return button
 
-    def toggle_propagation_direction(self, chan: int = 64):
+    def toggle_propagation_direction(self, chan: int = 96):
         self.backward = not self.backward
-        # self.control.ttl_toggle(chan)
+        self.control.ttl_toggle(chan)
 
-    def led_panel(self, chan: int = 65):
+    def led_panel(self, chan: int = 97):
         return self.control.continuous_slider(chan, name='LED Voltage', vlim=(0, 3))
 
     def home_panel(self):
@@ -985,7 +999,7 @@ class AMF420Mesh(ActivePhotonicsImager):
                                        step=1, start=0, end=640)
         spot_row.param.watch(change_tuple("spot_rowcol", 0), 'value')
         spot_col = pn.widgets.IntInput(name='Initial Spot Col', value=self.spot_rowcol[1],
-                                       step=1, start=0, end=512)
+                                       step=1, start=0, end=640)
         spot_col.param.watch(change_tuple("spot_rowcol", 1), 'value')
 
         window_height = pn.widgets.IntInput(name='Initial Window Height', value=self.window_dim[0],
@@ -996,7 +1010,7 @@ class AMF420Mesh(ActivePhotonicsImager):
         window_width.param.watch(change_tuple("window_dim", 1), 'value')
 
         interlayer_x = pn.widgets.FloatInput(name='Initial Interlayer X {mm}', value=self.interlayer_xy[0],
-                                       step=.0001, start=-.01, end=.01)
+                                       step=.0001, start=-.5, end=.5)
         interlayer_x.param.watch(change_tuple("interlayer_xy", 0), 'value')
         interlayer_y = pn.widgets.FloatInput(name='Initial Interlayer Y {mm}', value=self.interlayer_xy[1],
                                        step=.0001, start=-.5, end=.5)
